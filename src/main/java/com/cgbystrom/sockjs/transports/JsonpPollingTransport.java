@@ -1,20 +1,28 @@
 package com.cgbystrom.sockjs.transports;
 
-import com.cgbystrom.sockjs.Frame;
+import java.util.List;
+
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
-import org.jboss.netty.channel.*;
-import org.jboss.netty.handler.codec.http.*;
+import org.jboss.netty.channel.ChannelFutureListener;
+import org.jboss.netty.channel.ChannelHandlerContext;
+import org.jboss.netty.channel.DownstreamMessageEvent;
+import org.jboss.netty.channel.MessageEvent;
+import org.jboss.netty.handler.codec.http.HttpHeaders;
+import org.jboss.netty.handler.codec.http.HttpRequest;
+import org.jboss.netty.handler.codec.http.HttpResponse;
+import org.jboss.netty.handler.codec.http.HttpResponseStatus;
+import org.jboss.netty.handler.codec.http.QueryStringDecoder;
 import org.jboss.netty.logging.InternalLogger;
 import org.jboss.netty.logging.InternalLoggerFactory;
 import org.jboss.netty.util.CharsetUtil;
 
-import java.util.List;
+import com.cgbystrom.sockjs.Frame;
 
 public class JsonpPollingTransport extends BaseTransport {
-    private static final InternalLogger logger = InternalLoggerFactory.getInstance(JsonpPollingTransport.class);
-    
-    private String jsonpCallback;
+    private static final InternalLogger LOGGER = InternalLoggerFactory.getInstance(JsonpPollingTransport.class);
+
+    private String                      jsonpCallback;
 
     @Override
     public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) throws Exception {
@@ -44,7 +52,7 @@ public class JsonpPollingTransport extends BaseTransport {
             String m = jsonpCallback + "(\"" + escapedContent.toString(CharsetUtil.UTF_8) + "\");\r\n";
 
             e.getFuture().addListener(ChannelFutureListener.CLOSE);
-            
+
             final ChannelBuffer content = ChannelBuffers.copiedBuffer(m, CharsetUtil.UTF_8);
             response.setContent(content);
             response.setHeader(HttpHeaders.Names.CONTENT_LENGTH, content.readableBytes());

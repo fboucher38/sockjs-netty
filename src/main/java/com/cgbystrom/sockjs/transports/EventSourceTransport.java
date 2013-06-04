@@ -10,7 +10,7 @@ import org.jboss.netty.logging.InternalLoggerFactory;
 import org.jboss.netty.util.CharsetUtil;
 
 public class EventSourceTransport extends StreamingTransport {
-    private static final InternalLogger logger = InternalLoggerFactory.getInstance(EventSourceTransport.class);
+    private static final InternalLogger LOGGER = InternalLoggerFactory.getInstance(EventSourceTransport.class);
     private static final ChannelBuffer NEW_LINE = ChannelBuffers.copiedBuffer("\r\n", CharsetUtil.UTF_8);
     private static final ChannelBuffer FRAME_BEGIN = ChannelBuffers.copiedBuffer("data: ", CharsetUtil.UTF_8);
     private static final ChannelBuffer FRAME_END = ChannelBuffers.copiedBuffer("\r\n\r\n", CharsetUtil.UTF_8);

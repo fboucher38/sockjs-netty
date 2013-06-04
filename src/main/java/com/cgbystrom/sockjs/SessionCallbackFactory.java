@@ -1,5 +1,5 @@
 package com.cgbystrom.sockjs;
 
 public interface SessionCallbackFactory {
-    SessionCallback getSession(String id) throws Exception;
+    SessionCallback createSessionCallback(String id) throws Exception;
 }

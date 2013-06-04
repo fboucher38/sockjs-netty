@@ -1,188 +1,327 @@
 package com.cgbystrom.sockjs;
 
-import org.jboss.netty.channel.*;
+import java.util.LinkedList;
+import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+import org.jboss.netty.channel.Channel;
+import org.jboss.netty.channel.ChannelFuture;
+import org.jboss.netty.channel.ChannelFutureListener;
+import org.jboss.netty.channel.ChannelHandlerContext;
+import org.jboss.netty.channel.ChannelStateEvent;
+import org.jboss.netty.channel.Channels;
+import org.jboss.netty.channel.ExceptionEvent;
+import org.jboss.netty.channel.MessageEvent;
+import org.jboss.netty.channel.SimpleChannelHandler;
 import org.jboss.netty.logging.InternalLogger;
 import org.jboss.netty.logging.InternalLoggerFactory;
 import org.jboss.netty.util.CharsetUtil;
 
-import java.util.ArrayList;
-import java.util.LinkedList;
-import java.util.concurrent.atomic.AtomicBoolean;
-
 /**
- * Responsible for handling SockJS sessions.
- * It is a stateful channel handler and tied to each session.
- * Only session specific logic and is unaware of underlying transport.
- * This is by design and Netty enables a clean way to do this through the pipeline and handlers.
+ * Responsible for handling SockJS sessions. It is a stateful channel handler
+ * and tied to each session. Only session specific logic and is unaware of
+ * underlying transport. This is by design and Netty enables a clean way to do
+ * this through the pipeline and handlers.
  */
-public class SessionHandler extends SimpleChannelHandler implements Session {
-    private static final InternalLogger logger = InternalLoggerFactory.getInstance(SessionHandler.class);
-    public enum State { CONNECTING, OPEN, CLOSED, INTERRUPTED }
+public final class SessionHandler extends SimpleChannelHandler implements Session {
 
-    private String id;
-    private SessionCallback sessionCallback;
-    private Channel channel;
-    private State state = State.CONNECTING;
+    private static final InternalLogger LOGGER = InternalLoggerFactory.getInstance(SessionHandler.class);
+
+    public enum State {
+        CONNECTING, OPEN, CLOSING, CLOSED
+    }
+
+    private final String                    id;
+    private final Service                   service;
     private final LinkedList<SockJsMessage> messageQueue = new LinkedList<SockJsMessage>();
-    private final AtomicBoolean serverHasInitiatedClose = new AtomicBoolean(false);
-    private Frame.CloseFrame closeReason;
+    private final SessionCallback           sessionCallback;
+    private final ScheduledExecutorService  scheduledExecutor;
+    private final Integer                   timeoutDelay;
+    private final Integer                   hreatbeatDelay;
 
-    protected SessionHandler(String id, SessionCallback sessionCallback) {
+    private Channel                         channel;
+    private State                           state        = State.CONNECTING;
+    private Frame.CloseFrame                closeReason;
+    private Future<?>                       timeoutFuture;
+    private Future<?>                       heartbeatFuture;
+
+    protected SessionHandler(Service service, String id, SessionCallback sessionCallback,
+            ScheduledExecutorService scheduledExecutor, Integer timeoutDelay, Integer hreatbeatDelay) {
         this.id = id;
+        this.service = service;
         this.sessionCallback = sessionCallback;
-        if (logger.isDebugEnabled())
-            logger.debug("Session " + id + " created");
+        this.scheduledExecutor = scheduledExecutor;
+        this.timeoutDelay = timeoutDelay;
+        this.hreatbeatDelay = hreatbeatDelay;
+
+        if (LOGGER.isDebugEnabled())
+            LOGGER.debug("Session " + id + " created");
     }
 
     @Override
-    public synchronized void channelConnected(ChannelHandlerContext ctx, ChannelStateEvent e) throws Exception {
-        if (logger.isDebugEnabled())
-            logger.debug("Session " + id + " connected " + e.getChannel());
+    public synchronized void channelConnected(ChannelHandlerContext context, ChannelStateEvent event) throws Exception {
+        if (LOGGER.isDebugEnabled())
+            LOGGER.debug("Session " + id + " connected " + event.getChannel());
 
-        // FIXME: Check if session has expired
-        // FIXME: Check if session is locked (another handler already uses it), all but WS can do this
+        // FIXME: Check if session is locked (another handler already uses it),
+        // all but WS can do this
 
+        if (state == State.CLOSED) {
+            throw new IllegalStateException("session already closed");
+        }
+
+        if (channel != null) {
+            if (LOGGER.isDebugEnabled())
+                LOGGER.debug("Session " + id + " already have a channel connected.");
+
+            event.getChannel().write(Frame.closeFrame(2010, "Another connection still open"))
+                    .addListener(ChannelFutureListener.CLOSE);
+            return;
+        }
+
+        tryCancelTimeout();
+
+        if (state == State.CLOSING) {
+            doClose(event.getChannel());
+            setState(State.CLOSED);
+            service.removeSession(SessionHandler.this);
+            sessionCallback.onClose(SessionHandler.this);
+            return;
+        }
+
+        setChannel(event.getChannel());
 
         if (state == State.CONNECTING) {
-            serverHasInitiatedClose.set(false);
+            setChannel(event.getChannel());
+            channel.write(Frame.openFrame());
             setState(State.OPEN);
-            closeReason = null;
-            setChannel(e.getChannel());
-            e.getChannel().write(Frame.openFrame());
-            // FIXME: Ability to reject a connection here by returning false in callback to onOpen?
+            // FIXME: Ability to reject a connection here by returning false in
+            // callback to onOpen?
             sessionCallback.onOpen(this);
-            // FIXME: Either start the heartbeat or flush pending messages in queue
-            flush();
-        } else if (state == State.OPEN) {
-            if (channel != null) {
-                logger.debug("Session " + id + " already have a channel connected.");
-                throw new LockException(e.getChannel());
-            }
-            serverHasInitiatedClose.set(false);
-            setChannel(e.getChannel());
-            logger.debug("Session " + id + " is open, flushing..");
-            flush();
-        } else if (state == State.CLOSED) {
-            logger.debug("Session " + id + " is closed, go away.");
-            final Frame.CloseFrame frame = closeReason == null ? Frame.closeFrame(3000, "Go away!") : closeReason;
-            e.getChannel().write(frame);
-        } else if (state == State.INTERRUPTED) {
-            logger.debug("Session " + id + " has been interrupted by network error, cannot accept channel.");
-            e.getChannel().write(Frame.closeFrame(1002, "Connection interrupted"));//.addListener(ChannelFutureListener.CLOSE);
-        } else {
-            throw new Exception("Invalid channel state: " + state);
+        }
+
+        scheduleHeartbeat();
+        tryFlush();
+    }
+
+    @Override
+    public synchronized void channelClosed(ChannelHandlerContext context, ChannelStateEvent event) throws Exception {
+        if (channel != null && channel == event.getChannel()) {
+            unsetChannel(event.getChannel());
+            tryCancelHeartbeat();
+            scheduleTimeout();
         }
     }
 
     @Override
-    public synchronized void closeRequested(ChannelHandlerContext ctx, ChannelStateEvent e) throws Exception {
-        if (channel == e.getChannel()) {
-            // This may be a bad practice of determining close initiator.
-            // See http://stackoverflow.com/questions/8254060/how-to-know-if-a-channeldisconnected-comes-from-the-client-or-server-in-a-netty
-            logger.debug("Session " + id + " requested close by server " + e.getChannel());
-            serverHasInitiatedClose.set(true);
-        }
-        super.closeRequested(ctx, e);
-    }
-
-    @Override
-    public void writeRequested(ChannelHandlerContext ctx, MessageEvent e) throws Exception {
-        if (e.getMessage() instanceof Frame) {
+    public synchronized void writeRequested(ChannelHandlerContext ctx, MessageEvent e) throws Exception {
+        if (LOGGER.isDebugEnabled() && e.getMessage() instanceof Frame) {
             Frame f = (Frame) e.getMessage();
             String data = f.getData().toString(CharsetUtil.UTF_8);
-            logger.debug("Session " + id + " for channel " + e.getChannel() + " sending: " + data);
+            LOGGER.debug("Session " + id + " for channel " + e.getChannel() + " sending: " + data);
         }
         super.writeRequested(ctx, e);
     }
 
     @Override
-    public synchronized void channelClosed(ChannelHandlerContext ctx, ChannelStateEvent e) throws Exception {
-        if (state == State.OPEN && !serverHasInitiatedClose.get()) {
-            logger.debug("Session " + id + " underlying channel closed unexpectedly. Flagging session as interrupted." + e.getChannel());
-            setState(State.INTERRUPTED);
-        } else {
-            logger.debug("Session " + id + " underlying channel closed " + e.getChannel());
+    public synchronized void messageReceived(ChannelHandlerContext ctx, MessageEvent e) throws Exception {
+        SockJsMessage msg = (SockJsMessage) e.getMessage();
+        if (LOGGER.isDebugEnabled())
+            LOGGER.debug("Session " + id + " received message: " + msg.getMessage());
+
+        sessionCallback.onMessage(this, msg.getMessage());
+    }
+
+    @Override
+    public synchronized void exceptionCaught(ChannelHandlerContext ctx, ExceptionEvent e) throws Exception {
+        if (ctx.getChannel().isOpen()) {
+            ctx.getChannel().close();
         }
-        // FIXME: Stop any heartbeat
-        // FIXME: Timer to expire the connection? Should not close session here.
-        // FIXME: Notify the sessionCallback? Unless timeout etc, disconnect it?
-        unsetChannel(e.getChannel());
-        super.channelClosed(ctx, e);
-    }
-
-    @Override
-    public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) throws Exception {
-        SockJsMessage msg = (SockJsMessage)e.getMessage();
-        logger.debug("Session " + id + " received message: " + msg.getMessage());
-        sessionCallback.onMessage(msg.getMessage());
-    }
-
-    @Override
-    public void exceptionCaught(ChannelHandlerContext ctx, ExceptionEvent e) throws Exception {
-        boolean isSilent = sessionCallback.onError(e.getCause());
-        if (!isSilent) {
-            super.exceptionCaught(ctx, e);
+        if (state != State.CLOSED && ctx.getChannel() == channel) {
+            setState(State.CLOSED);
+            service.removeSession(this);
+            sessionCallback.onClose(this);
+            sessionCallback.onError(this, e.getCause());
         }
     }
 
     @Override
     public synchronized void send(String message) {
-        final SockJsMessage msg = new SockJsMessage(message);
-        // Check and see if we can send the message straight away
-        if (channel != null && channel.isWritable() && messageQueue.isEmpty()) {
-            channel.write(Frame.messageFrame(msg));
-        } else {
-            messageQueue.addLast(msg);
-            flush();
-        }
+        SockJsMessage msg = new SockJsMessage(message);
+        messageQueue.addLast(msg);
+        tryFlush();
     }
 
     @Override
-    public void close() {
-        close(3000, "Go away!");
+    public synchronized void close() {
+        close(1000, "Normal closure");
     }
 
+    @Override
     public synchronized void close(int code, String message) {
         if (state != State.CLOSED) {
-            logger.debug("Session " + id + " server initiated close, closing...");
-            setState(State.CLOSED);
-            closeReason = Frame.closeFrame(code, message);
+            if (LOGGER.isDebugEnabled())
+                LOGGER.debug("Session " + id + " server initiated close, closing...");
 
-            if (channel != null && channel.isWritable()) {
-                channel.write(closeReason);
+            closeReason = Frame.closeFrame(code, message);
+            setState(State.CLOSING);
+
+            if (channel != null && channel.isConnected()) {
+                doClose(channel).addListener(new ChannelFutureListener() {
+
+                    @Override
+                    public void operationComplete(ChannelFuture aFuture) throws Exception {
+                        if (aFuture.isSuccess()) {
+                            setState(State.CLOSED);
+                            service.removeSession(SessionHandler.this);
+                            sessionCallback.onClose(SessionHandler.this);
+                        } else {
+                            scheduleTimeout();
+                        }
+                    }
+                });
             }
-            // FIXME: Should we really call onClose here? Potentially calling it twice for same session close?
-            sessionCallback.onClose();
         }
     }
 
-    public void setState(State state) {
+    private ChannelFuture tryFlush() {
+        ChannelFuture future;
+
+        if (LOGGER.isDebugEnabled())
+            LOGGER.debug("Session " + id + " flushing queue");
+
+        if (channel == null || !channel.isConnected()) {
+            future = Channels.succeededFuture(channel);
+        } else {
+            future = doFlush(channel);
+        }
+
+        return future;
+    }
+
+    private ChannelFuture doClose(final Channel channel) {
+        final ChannelFuture future;
+        future = Channels.future(channel);
+
+        doFlush(channel).addListener(new ChannelFutureListener() {
+            @Override
+            public void operationComplete(ChannelFuture aFuture) throws Exception {
+                channel.write(closeReason).addListener(new ChannelFutureListener() {
+                    @Override
+                    public void operationComplete(ChannelFuture aFuture) throws Exception {
+                        channel.close().addListener(new ChannelFutureListener() {
+                            @Override
+                            public void operationComplete(ChannelFuture aFuture) throws Exception {
+                                if (aFuture.isSuccess()) {
+                                    future.setSuccess();
+                                } else {
+                                    future.setFailure(aFuture.getCause());
+                                }
+                            }
+                        });
+                    }
+                });
+            }
+        });
+
+        return future;
+    }
+
+    private ChannelFuture doFlush(Channel channel) {
+        ChannelFuture future;
+
+        SockJsMessage[] flushableMessages;
+        flushableMessages = messageQueue.toArray(new SockJsMessage[messageQueue.size()]);
+
+        if (flushableMessages.length > 0) {
+            tryCancelHeartbeat();
+            messageQueue.clear();
+            future = channel.write(Frame.messageFrame(flushableMessages));
+            scheduleHeartbeat();
+        } else {
+            future = Channels.succeededFuture(channel);
+        }
+
+        return future;
+    }
+
+    private void setState(State state) {
         this.state = state;
-        logger.debug("Session " + id + " state changed to " + state);
+        LOGGER.debug("Session " + id + " state changed to " + state);
     }
 
     private void setChannel(Channel channel) {
         this.channel = channel;
-        logger.debug("Session " + id + " channel added");
+        LOGGER.debug("Session " + id + " channel added");
     }
 
-    private synchronized void unsetChannel(Channel channel) {
+    private void unsetChannel(Channel channel) {
         if (this.channel != channel && this.channel != null) {
             return;
         }
         this.channel = null;
-        logger.debug("Session " + id + " channel removed. " + channel);
+        LOGGER.debug("Session " + id + " channel removed. " + channel);
     }
 
-    private synchronized void flush() {
-        if (channel == null || !channel.isWritable()) {
-            return;
+    private void scheduleHeartbeat() {
+        if (heartbeatFuture != null) {
+            throw new IllegalStateException("heartbeat is already scheduled");
         }
 
-        if (!messageQueue.isEmpty()) {
-            logger.debug("Session " + id + " flushing queue");
-            channel.write(Frame.messageFrame(new ArrayList<SockJsMessage>(messageQueue).toArray(new SockJsMessage[messageQueue.size()])));
-            messageQueue.clear();
+        heartbeatFuture = scheduledExecutor.scheduleWithFixedDelay(new Runnable() {
+
+            @Override
+            public void run() {
+                synchronized (SessionHandler.this) {
+                    if (state != State.OPEN) {
+                        throw new IllegalStateException("session must be open");
+                    }
+                    if (channel == null || !channel.isConnected()) {
+                        throw new IllegalStateException("channel must be initialized and connected");
+                    }
+
+                    channel.write(Frame.heartbeatFrame());
+                }
+            }
+
+        }, hreatbeatDelay, hreatbeatDelay, TimeUnit.MILLISECONDS);
+
+    }
+
+    private void tryCancelHeartbeat() {
+        if (heartbeatFuture != null) {
+            heartbeatFuture.cancel(false);
+            heartbeatFuture = null;
+        }
+    }
+
+    private void scheduleTimeout() {
+        if (timeoutFuture != null) {
+            throw new IllegalStateException("timeout is already scheduled");
+        }
+
+        timeoutFuture = scheduledExecutor.schedule(new Runnable() {
+
+            @Override
+            public void run() {
+                synchronized (SessionHandler.this) {
+                    if (state == State.CLOSED) {
+                        throw new IllegalStateException("session is already closed");
+                    }
+                    setState(State.CLOSED);
+                    service.removeSession(SessionHandler.this);
+                    sessionCallback.onClose(SessionHandler.this);
+                }
+            }
+
+        }, timeoutDelay, TimeUnit.MILLISECONDS);
+    }
+
+    private void tryCancelTimeout() {
+        if (timeoutFuture != null) {
+            timeoutFuture.cancel(false);
+            timeoutFuture = null;
         }
     }
 
@@ -194,7 +333,9 @@ public class SessionHandler extends SimpleChannelHandler implements Session {
 
     public static class LockException extends Exception {
         public LockException(Channel channel) {
-            super("Session is locked by channel " + channel + ". Please disconnect other channel first before trying to register it with a session.");
+            super("Session is locked by channel " + channel
+                + ". Please disconnect other channel first before trying to register it with a session.");
         }
     }
+
 }

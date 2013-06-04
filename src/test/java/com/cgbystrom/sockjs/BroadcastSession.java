@@ -1,19 +1,20 @@
-package com.cgbystrom.sockjs.test;
-
-import com.cgbystrom.sockjs.Session;
-import com.cgbystrom.sockjs.SessionCallback;
-import org.jboss.netty.logging.InternalLogger;
-import org.jboss.netty.logging.InternalLoggerFactory;
+package com.cgbystrom.sockjs;
 
 import java.util.HashSet;
 import java.util.Set;
 
-public class BroadcastSession implements SessionCallback {
-    private static final InternalLogger logger = InternalLoggerFactory.getInstance(BroadcastSession.class);
-    private static final Set<Session> sessions = new HashSet<Session>();
+import org.jboss.netty.logging.InternalLogger;
+import org.jboss.netty.logging.InternalLoggerFactory;
 
-    private Session session;
-    private String name;
+import com.cgbystrom.sockjs.Session;
+import com.cgbystrom.sockjs.SessionCallback;
+
+public class BroadcastSession implements SessionCallback {
+    private static final InternalLogger logger   = InternalLoggerFactory.getInstance(BroadcastSession.class);
+    private static final Set<Session>   sessions = new HashSet<Session>();
+
+    private Session                     session;
+    private String                      name;
 
     @Override
     public void onOpen(Session session) {
@@ -23,13 +24,13 @@ public class BroadcastSession implements SessionCallback {
     }
 
     @Override
-    public void onClose() {
+    public void onClose(Session session) {
         logger.debug("Disconnected!");
         sessions.remove(session);
     }
 
     @Override
-    public void onMessage(String message) {
+    public void onMessage(Session session, String message) {
         logger.debug("Broadcasting received message: " + message);
         for (Session s : sessions) {
             s.send(message);
@@ -37,7 +38,7 @@ public class BroadcastSession implements SessionCallback {
     }
 
     @Override
-    public boolean onError(Throwable exception) {
+    public boolean onError(Session session, Throwable exception) {
         logger.error("Error", exception);
         return true;
     }

@@ -5,7 +5,6 @@ import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.encoder.PatternLayoutEncoder;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.ConsoleAppender;
-import com.cgbystrom.sockjs.test.BroadcastSession;
 import org.jboss.netty.bootstrap.ServerBootstrap;
 import org.jboss.netty.channel.ChannelPipeline;
 import org.jboss.netty.channel.ChannelPipelineFactory;
@@ -46,38 +45,38 @@ public class TestServer {
                         Executors.newCachedThreadPool(),
                         Executors.newCachedThreadPool()));
 
-        final ServiceRouter router = new ServiceRouter("http://cdn.sockjs.org/sockjs-0.3.4.min.js");
-        router.registerService("/echo", new SessionCallbackFactory() {
-            @Override
-            public EchoSession getSession(String id) throws Exception {
-                return new EchoSession();
-            }
-        }, true, 4096);
-        router.registerService("/disabled_websocket_echo", new DisabledWebSocketEchoSession(), false, 128 * 1024);
-        router.registerService("/cookie_needed_echo", new EchoSession(), true, 4096).setJsessionid(true);
-        router.registerService("/close", new CloseSession(), true, 128 * 1024);
-        router.registerService("/amplify", new AmplifySession(), true, 128 * 1024);
-        router.registerService("/broadcast", new SessionCallbackFactory() {
-            @Override
-            public BroadcastSession getSession(String id) throws Exception {
-                return new BroadcastSession();
-            }
-        }, true, 128 * 1024);
-
-        bootstrap.setPipelineFactory(new ChannelPipelineFactory() {
-            @Override
-            public ChannelPipeline getPipeline() throws Exception {
-                ChannelPipeline pipeline = pipeline();
-                pipeline.addLast("decoder", new HttpRequestDecoder());
-                pipeline.addLast("chunkAggregator", new HttpChunkAggregator(130 * 1024)); // Required for WS handshaker or else NPE.
-                pipeline.addLast("encoder", new HttpResponseEncoder());
-                pipeline.addLast("preflight", new PreflightHandler());
-                pipeline.addLast("router", router);
-                return pipeline;
-            }
-        });
-
-        bootstrap.bind(new InetSocketAddress(8090));
-        System.out.println("Server running..");
+//        final ServiceRouter router = new ServiceRouter("http://cdn.sockjs.org/sockjs-0.3.4.min.js");
+//        router.registerService("/echo", new SessionCallbackFactory() {
+//            @Override
+//            public EchoSession getSession(String id) throws Exception {
+//                return new EchoSession();
+//            }
+//        }, true, 4096);
+//        router.registerService("/disabled_websocket_echo", new DisabledWebSocketEchoSession(), false, 128 * 1024);
+//        router.registerService("/cookie_needed_echo", new EchoSession(), true, 4096).setJsessionid(true);
+//        router.registerService("/close", new CloseSession(), true, 128 * 1024);
+//        router.registerService("/amplify", new AmplifySession(), true, 128 * 1024);
+//        router.registerService("/broadcast", new SessionCallbackFactory() {
+//            @Override
+//            public BroadcastSession getSession(String id) throws Exception {
+//                return new BroadcastSession();
+//            }
+//        }, true, 128 * 1024);
+//
+//        bootstrap.setPipelineFactory(new ChannelPipelineFactory() {
+//            @Override
+//            public ChannelPipeline getPipeline() throws Exception {
+//                ChannelPipeline pipeline = pipeline();
+//                pipeline.addLast("decoder", new HttpRequestDecoder());
+//                pipeline.addLast("chunkAggregator", new HttpChunkAggregator(130 * 1024)); // Required for WS handshaker or else NPE.
+//                pipeline.addLast("encoder", new HttpResponseEncoder());
+//                pipeline.addLast("preflight", new PreflightHandler());
+//                pipeline.addLast("router", router);
+//                return pipeline;
+//            }
+//        });
+//
+//        bootstrap.bind(new InetSocketAddress(8090));
+//        System.out.println("Server running..");
     }
 }

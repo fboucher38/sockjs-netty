@@ -19,7 +19,7 @@ public class BaseTransport extends SimpleChannelHandler {
     public static final String CONTENT_TYPE_PLAIN = "text/plain; charset=UTF-8";
     public static final String CONTENT_TYPE_HTML = "text/html; charset=UTF-8";
 
-    private static final InternalLogger logger = InternalLoggerFactory.getInstance(BaseTransport.class);
+    private static final InternalLogger LOGGER = InternalLoggerFactory.getInstance(BaseTransport.class);
     private static final CookieDecoder COOKIE_DECODER = new CookieDecoder();
     private static final String JSESSIONID = "JSESSIONID";
     private static final String DEFAULT_COOKIE = "JSESSIONID=dummy; path=/";

@@ -13,7 +13,7 @@ import java.util.List;
 import static org.jboss.netty.handler.codec.http.HttpHeaders.Names.*;
 
 public class HtmlFileTransport extends StreamingTransport {
-    private static final InternalLogger logger = InternalLoggerFactory.getInstance(HtmlFileTransport.class);
+    private static final InternalLogger LOGGER = InternalLoggerFactory.getInstance(HtmlFileTransport.class);
     private static final ChannelBuffer HEADER_PART1 = ChannelBuffers.copiedBuffer("<!doctype html>\n" +
             "<html><head>\n" +
             "  <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\" />\n" +
