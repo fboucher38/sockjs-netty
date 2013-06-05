@@ -6,7 +6,6 @@ import static org.jboss.netty.handler.codec.http.HttpHeaders.Names.CONTENT_LENGT
 import static org.jboss.netty.handler.codec.http.HttpHeaders.Names.CONTENT_TYPE;
 import static org.jboss.netty.handler.codec.http.HttpHeaders.Values.KEEP_ALIVE;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -21,7 +20,6 @@ import org.jboss.netty.channel.ChannelFuture;
 import org.jboss.netty.channel.ChannelFutureListener;
 import org.jboss.netty.channel.ChannelHandlerContext;
 import org.jboss.netty.channel.ChannelPipeline;
-import org.jboss.netty.channel.ExceptionEvent;
 import org.jboss.netty.channel.MessageEvent;
 import org.jboss.netty.channel.SimpleChannelHandler;
 import org.jboss.netty.handler.codec.http.DefaultHttpResponse;
@@ -88,19 +86,6 @@ public class ServiceRouter extends SimpleChannelHandler {
         writeResponse(e.getChannel(), request, response);
     }
 
-    @Override
-    public void exceptionCaught(ChannelHandlerContext ctx, ExceptionEvent e) throws Exception {
-        final String connectionClosedMsg = "An existing connection was forcibly closed by the remote host";
-        final Throwable t = e.getCause();
-
-        // FIXME change this test
-        if (t instanceof IOException && t.getMessage().equalsIgnoreCase(connectionClosedMsg)) {
-            LOGGER.debug("Unexpected close (may be safe to ignore).");
-        } else {
-            super.exceptionCaught(ctx, e);
-        }
-    }
-
     private void handleService(ChannelHandlerContext ctx, MessageEvent e, Service service) throws Exception {
         HttpRequest request = (HttpRequest) e.getMessage();
         request.setUri(request.getUri().replaceFirst(service.getUrl(), ""));
@@ -123,7 +108,7 @@ public class ServiceRouter extends SimpleChannelHandler {
         } else if (path.startsWith("/websocket")) {
             // Raw web socket
             SessionHandler sessionHandler;
-            sessionHandler = service.forceCreateSession("rawwebsocket-" + RANDOM.nextLong());
+            sessionHandler = service.forceCreateSession("rawwebsocket-" + RANDOM.nextLong(), false);
             ctx.getPipeline().addLast("sockjs-websocket", new RawWebSocketTransport(path));
             ctx.getPipeline().addLast("sockjs-session-handler", sessionHandler);
         } else {
@@ -149,6 +134,7 @@ public class ServiceRouter extends SimpleChannelHandler {
 
         ChannelPipeline pipeline = ctx.getPipeline();
         SessionCreation sessionCreation = SessionCreation.CREATE_OR_REUSE;
+        boolean heartbeatRequired = true;
         if (transport.equals("/xhr_send")) {
             pipeline.addLast("sockjs-xhr-send", new XhrSendTransport(false));
             sessionCreation = SessionCreation.FORCE_REUSE; // Expect an existing
@@ -171,6 +157,7 @@ public class ServiceRouter extends SimpleChannelHandler {
             pipeline.addLast("sockjs-websocket", new WebSocketTransport(service.getUrl() + path, service));
             // Websockets should re-create a session every time
             sessionCreation = SessionCreation.FORCE_CREATE;
+            heartbeatRequired = false;
         } else {
             return false;
         }
@@ -178,13 +165,13 @@ public class ServiceRouter extends SimpleChannelHandler {
         SessionHandler sessionHandler = null;
         switch (sessionCreation) {
             case CREATE_OR_REUSE:
-                sessionHandler = service.getOrCreateSession(sessionId);
+                sessionHandler = service.getOrCreateSession(sessionId, heartbeatRequired);
                 break;
             case FORCE_REUSE:
                 sessionHandler = service.getSession(sessionId);
                 break;
             case FORCE_CREATE:
-                sessionHandler = service.forceCreateSession(sessionId);
+                sessionHandler = service.forceCreateSession(sessionId, heartbeatRequired);
                 break;
             default:
                 throw new Exception("Unknown sessionCreation value: " + sessionCreation);

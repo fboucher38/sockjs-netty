@@ -1,5 +1,6 @@
 package com.cgbystrom.sockjs;
 
+import java.net.SocketAddress;
 import java.util.LinkedList;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
@@ -39,20 +40,25 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
     private final ScheduledExecutorService  scheduledExecutor;
     private final Integer                   timeoutDelay;
     private final Integer                   hreatbeatDelay;
+    private final boolean                   heartbeatRequired;
 
     private Channel                         channel;
+    private SocketAddress                   localAddress;
+    private SocketAddress                   remoteAddress;
     private State                           state        = State.CONNECTING;
     private Frame.CloseFrame                closeReason;
     private Future<?>                       timeoutFuture;
     private Future<?>                       heartbeatFuture;
 
     protected SessionHandler(Service service, String id, SessionCallback sessionCallback,
-            ScheduledExecutorService scheduledExecutor, Integer timeoutDelay, Integer hreatbeatDelay) {
+            ScheduledExecutorService scheduledExecutor, Integer timeoutDelay, boolean heartbeatActivated,
+            Integer hreatbeatDelay) {
         this.id = id;
         this.service = service;
         this.sessionCallback = sessionCallback;
         this.scheduledExecutor = scheduledExecutor;
         this.timeoutDelay = timeoutDelay;
+        this.heartbeatRequired = heartbeatActivated;
         this.hreatbeatDelay = hreatbeatDelay;
 
         if (LOGGER.isDebugEnabled())
@@ -91,9 +97,9 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
         }
 
         setChannel(event.getChannel());
+        scheduleHeartbeat();
 
         if (state == State.CONNECTING) {
-            setChannel(event.getChannel());
             channel.write(Frame.openFrame());
             setState(State.OPEN);
             // FIXME: Ability to reject a connection here by returning false in
@@ -101,7 +107,6 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
             sessionCallback.onOpen(this);
         }
 
-        scheduleHeartbeat();
         tryFlush();
     }
 
@@ -110,7 +115,9 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
         if (channel != null && channel == event.getChannel()) {
             unsetChannel(event.getChannel());
             tryCancelHeartbeat();
-            scheduleTimeout();
+            if (state == State.CONNECTING || state == State.OPEN) {
+                scheduleTimeout();
+            }
         }
     }
 
@@ -126,11 +133,14 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
 
     @Override
     public synchronized void messageReceived(ChannelHandlerContext ctx, MessageEvent e) throws Exception {
-        SockJsMessage msg = (SockJsMessage) e.getMessage();
-        if (LOGGER.isDebugEnabled())
-            LOGGER.debug("Session " + id + " received message: " + msg.getMessage());
+        if (state == State.OPEN) {
+            SockJsMessage msg = (SockJsMessage) e.getMessage();
 
-        sessionCallback.onMessage(this, msg.getMessage());
+            if (LOGGER.isDebugEnabled())
+                LOGGER.debug("Session " + id + " received message: " + msg.getMessage());
+
+            sessionCallback.onMessage(this, msg.getMessage());
+        }
     }
 
     @Override
@@ -138,7 +148,8 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
         if (ctx.getChannel().isOpen()) {
             ctx.getChannel().close();
         }
-        if (state != State.CLOSED && ctx.getChannel() == channel) {
+        if (state != State.CLOSED) {
+            tryCancelTimeout();
             setState(State.CLOSED);
             service.removeSession(this);
             sessionCallback.onClose(this);
@@ -180,24 +191,29 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
                             scheduleTimeout();
                         }
                     }
+
                 });
             }
         }
     }
 
-    private ChannelFuture tryFlush() {
-        ChannelFuture future;
+    @Override
+    public SocketAddress getLocalAddress() {
+        return localAddress;
+    }
 
+    @Override
+    public SocketAddress getRemoteAddress() {
+        return remoteAddress;
+    }
+
+    private void tryFlush() {
         if (LOGGER.isDebugEnabled())
             LOGGER.debug("Session " + id + " flushing queue");
 
-        if (channel == null || !channel.isConnected()) {
-            future = Channels.succeededFuture(channel);
-        } else {
-            future = doFlush(channel);
+        if (channel != null && channel.isConnected()) {
+            doFlush(channel);
         }
-
-        return future;
     }
 
     private ChannelFuture doClose(final Channel channel) {
@@ -208,9 +224,11 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
             @Override
             public void operationComplete(ChannelFuture aFuture) throws Exception {
                 channel.write(closeReason).addListener(new ChannelFutureListener() {
+
                     @Override
                     public void operationComplete(ChannelFuture aFuture) throws Exception {
                         channel.close().addListener(new ChannelFutureListener() {
+
                             @Override
                             public void operationComplete(ChannelFuture aFuture) throws Exception {
                                 if (aFuture.isSuccess()) {
@@ -219,8 +237,10 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
                                     future.setFailure(aFuture.getCause());
                                 }
                             }
+
                         });
                     }
+
                 });
             }
         });
@@ -235,10 +255,11 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
         flushableMessages = messageQueue.toArray(new SockJsMessage[messageQueue.size()]);
 
         if (flushableMessages.length > 0) {
-            tryCancelHeartbeat();
             messageQueue.clear();
-            future = channel.write(Frame.messageFrame(flushableMessages));
+            tryCancelHeartbeat();
             scheduleHeartbeat();
+            future = channel.write(Frame.messageFrame(flushableMessages));
+
         } else {
             future = Channels.succeededFuture(channel);
         }
@@ -247,21 +268,30 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
     }
 
     private void setState(State state) {
+        if (LOGGER.isDebugEnabled())
+            LOGGER.debug("Session " + id + " state changed to " + state);
+
         this.state = state;
-        LOGGER.debug("Session " + id + " state changed to " + state);
     }
 
     private void setChannel(Channel channel) {
+        if (LOGGER.isDebugEnabled())
+            LOGGER.debug("Session " + id + " channel added");
+
         this.channel = channel;
-        LOGGER.debug("Session " + id + " channel added");
+        this.localAddress = channel.getLocalAddress();
+        this.remoteAddress = channel.getRemoteAddress();
     }
 
     private void unsetChannel(Channel channel) {
         if (this.channel != channel && this.channel != null) {
             return;
         }
+
+        if (LOGGER.isDebugEnabled())
+            LOGGER.debug("Session " + id + " channel removed " + channel);
+
         this.channel = null;
-        LOGGER.debug("Session " + id + " channel removed. " + channel);
     }
 
     private void scheduleHeartbeat() {
@@ -297,6 +327,10 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
     }
 
     private void scheduleTimeout() {
+        if (!heartbeatRequired) {
+            return;
+        }
+
         if (timeoutFuture != null) {
             throw new IllegalStateException("timeout is already scheduled");
         }
@@ -311,7 +345,11 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
                     }
                     setState(State.CLOSED);
                     service.removeSession(SessionHandler.this);
-                    sessionCallback.onClose(SessionHandler.this);
+                    try {
+                        sessionCallback.onClose(SessionHandler.this);
+                    } catch (Exception exception) {
+                        sessionCallback.onError(SessionHandler.this, exception);
+                    }
                 }
             }
 

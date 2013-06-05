@@ -85,19 +85,21 @@ public class RawWebSocketTransport extends SimpleChannelHandler {
         if (e.getMessage() instanceof Frame) {
             if (e.getMessage() instanceof Frame.MessageFrame) {
                 Frame.MessageFrame f = (Frame.MessageFrame) e.getMessage();
-                LOGGER.debug("Write requested for " + f.getClass().getSimpleName());
+                if (LOGGER.isDebugEnabled())
+                    LOGGER.debug("Write requested for " + f.getClass().getSimpleName());
                 for (SockJsMessage m : f.getMessages()) {
                     TextWebSocketFrame message = new TextWebSocketFrame(m.getMessage());
                     super.writeRequested(ctx,
                             new DownstreamMessageEvent(e.getChannel(), e.getFuture(), message, e.getRemoteAddress()));
                 }
             } else if (e.getMessage() instanceof Frame.CloseFrame) {
-                // FIXME: Should really send close frame here?
-                // handshaker.close(e.getChannel(), new CloseWebSocketFrame());
-                // ?
-                e.getChannel().close();
+                CloseWebSocketFrame message = new CloseWebSocketFrame();
+                super.writeRequested(ctx,
+                        new DownstreamMessageEvent(e.getChannel(), e.getFuture(), message, e.getRemoteAddress()));
             } else if (e.getMessage() instanceof Frame.OpenFrame) {
                 LOGGER.debug("Open frame silenced");
+            } else if (e.getMessage() instanceof Frame.HeartbeatFrame) {
+                LOGGER.debug("Heartbeat frame silenced");
             } else {
                 throw new RuntimeException("Unknown frame: " + e.getMessage());
             }

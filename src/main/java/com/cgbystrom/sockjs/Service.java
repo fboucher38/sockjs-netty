@@ -53,7 +53,7 @@ public class Service {
      * Service using default configuration
      */
     public Service(String url, SessionCallbackFactory factory) {
-        this(url, factory, true, 128 * 1024, false, Executors.newSingleThreadScheduledExecutor(), 10000, 30000);
+        this(url, factory, true, 128 * 1024, false, Executors.newSingleThreadScheduledExecutor(), 5000, 30000);
     }
 
     public String getUrl() {
@@ -76,15 +76,14 @@ public class Service {
         return jsessionidEnabled;
     }
 
-    public SessionHandler getOrCreateSession(String sessionId) throws Exception {
+    public SessionHandler getOrCreateSession(String sessionId, boolean heartbeatRequired) throws Exception {
         SessionHandler session;
 
         session = sessions.get(sessionId);
         if (session == null) {
             SessionHandler newSession;
 
-            newSession = new SessionHandler(this, sessionId, factory.createSessionCallback(sessionId), scheduledExecutor,
-                    timeoutDelay, hreatbeatDelay);
+            newSession = newSession(sessionId, heartbeatRequired);
             session = sessions.putIfAbsent(sessionId, newSession);
             if (session == null) {
                 session = newSession;
@@ -110,9 +109,9 @@ public class Service {
      * @return the created session
      * @throws Exception
      */
-    public SessionHandler forceCreateSession(String sessionId) throws Exception {
+    public SessionHandler forceCreateSession(String sessionId, boolean heartbeatRequired) throws Exception {
         SessionHandler newSession;
-        newSession = newSession(sessionId);
+        newSession = newSession(sessionId, heartbeatRequired);
 
         SessionHandler oldSession;
         oldSession = sessions.replace(sessionId, newSession);
@@ -137,9 +136,9 @@ public class Service {
      * @return
      * @throws Exception
      */
-    private SessionHandler newSession(String sessionId) throws Exception {
-        return new SessionHandler(this, sessionId, factory.createSessionCallback(sessionId), scheduledExecutor, timeoutDelay,
-                hreatbeatDelay);
+    private SessionHandler newSession(String sessionId, boolean heartbeatRequired) throws Exception {
+        return new SessionHandler(this, sessionId, factory.createSessionCallback(sessionId), scheduledExecutor,
+                timeoutDelay, heartbeatRequired, hreatbeatDelay);
     }
 
 }

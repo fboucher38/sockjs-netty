@@ -114,6 +114,7 @@ public class WebSocketTransport extends SimpleChannelHandler {
         if (e.getMessage() instanceof Frame) {
             Frame f = (Frame) e.getMessage();
             logger.debug("Write requested for " + f.getClass().getSimpleName());
+            // FIXME: special case for closeFrame is it really necessary ?
             if (f instanceof Frame.CloseFrame) {
                 e.getFuture().addListener(new ChannelFutureListener() {
                     @Override
