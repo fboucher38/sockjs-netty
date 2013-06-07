@@ -1,18 +1,28 @@
 package com.cgbystrom.sockjs.transports;
 
-import com.cgbystrom.sockjs.Frame;
+import static org.jboss.netty.handler.codec.http.HttpHeaders.Names.CACHE_CONTROL;
+
+import java.util.List;
+
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
-import org.jboss.netty.channel.*;
-import org.jboss.netty.handler.codec.http.*;
+import org.jboss.netty.channel.ChannelHandlerContext;
+import org.jboss.netty.channel.DownstreamMessageEvent;
+import org.jboss.netty.channel.MessageEvent;
+import org.jboss.netty.handler.codec.http.DefaultHttpChunk;
+import org.jboss.netty.handler.codec.http.HttpRequest;
+import org.jboss.netty.handler.codec.http.HttpResponse;
+import org.jboss.netty.handler.codec.http.HttpResponseStatus;
+import org.jboss.netty.handler.codec.http.QueryStringDecoder;
 import org.jboss.netty.logging.InternalLogger;
 import org.jboss.netty.logging.InternalLoggerFactory;
 import org.jboss.netty.util.CharsetUtil;
 
-import java.util.List;
-import static org.jboss.netty.handler.codec.http.HttpHeaders.Names.*;
+import com.cgbystrom.sockjs.frames.Frame;
+import com.cgbystrom.sockjs.frames.FrameEncoder;
 
 public class HtmlFileTransport extends StreamingTransport {
+    @SuppressWarnings("unused")
     private static final InternalLogger LOGGER = InternalLoggerFactory.getInstance(HtmlFileTransport.class);
     private static final ChannelBuffer HEADER_PART1 = ChannelBuffers.copiedBuffer("<!doctype html>\n" +
             "<html><head>\n" +
@@ -37,13 +47,14 @@ public class HtmlFileTransport extends StreamingTransport {
         super(maxResponseSize);
     }
 
+    @Override
     public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) throws Exception {
         HttpRequest request = (HttpRequest) e.getMessage();
         QueryStringDecoder qsd = new QueryStringDecoder(request.getUri());
 
         final List<String> c = qsd.getParameters().get("c");
         if (c == null) {
-            respond(e.getChannel(), HttpResponseStatus.INTERNAL_SERVER_ERROR, "\"callback\" parameter required.");
+            respondAndClose(e.getChannel(), HttpResponseStatus.INTERNAL_SERVER_ERROR, "\"callback\" parameter required.");
             return;
         }
         final String callback = c.get(0);
@@ -79,10 +90,9 @@ public class HtmlFileTransport extends StreamingTransport {
                 ctx.sendDownstream(new DownstreamMessageEvent(e.getChannel(), e.getFuture(), new DefaultHttpChunk(paddedHeader), e.getRemoteAddress()));
             }
 
-            final ChannelBuffer frameContent = Frame.encode(frame, false);
+            final ChannelBuffer frameContent = FrameEncoder.encode(frame, false);
             final ChannelBuffer content = ChannelBuffers.dynamicBuffer(frameContent.readableBytes() + 10);
-
-            Frame.escapeJson(frameContent, content);
+            FrameEncoder.escapeJson(frameContent, content);
             ChannelBuffer wrappedContent = ChannelBuffers.wrappedBuffer(PREFIX, content, POSTFIX);
             ctx.sendDownstream(new DownstreamMessageEvent(e.getChannel(), e.getFuture(), new DefaultHttpChunk(wrappedContent), e.getRemoteAddress()));
 

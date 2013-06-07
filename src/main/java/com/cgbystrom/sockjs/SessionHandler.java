@@ -17,7 +17,9 @@ import org.jboss.netty.channel.MessageEvent;
 import org.jboss.netty.channel.SimpleChannelHandler;
 import org.jboss.netty.logging.InternalLogger;
 import org.jboss.netty.logging.InternalLoggerFactory;
-import org.jboss.netty.util.CharsetUtil;
+
+import com.cgbystrom.sockjs.frames.Frame;
+import com.cgbystrom.sockjs.frames.Frame.MessageFrame;
 
 /**
  * Responsible for handling SockJS sessions. It is a stateful channel handler
@@ -35,12 +37,11 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
 
     private final String                    id;
     private final Service                   service;
-    private final LinkedList<SockJsMessage> messageQueue = new LinkedList<SockJsMessage>();
+    private final LinkedList<String>        messageQueue = new LinkedList<String>();
     private final SessionCallback           sessionCallback;
     private final ScheduledExecutorService  scheduledExecutor;
     private final Integer                   timeoutDelay;
     private final Integer                   hreatbeatDelay;
-    private final boolean                   heartbeatRequired;
 
     private Channel                         channel;
     private SocketAddress                   localAddress;
@@ -51,14 +52,13 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
     private Future<?>                       heartbeatFuture;
 
     protected SessionHandler(Service service, String id, SessionCallback sessionCallback,
-            ScheduledExecutorService scheduledExecutor, Integer timeoutDelay, boolean heartbeatActivated,
-            Integer hreatbeatDelay) {
+                             ScheduledExecutorService scheduledExecutor, Integer timeoutDelay,
+                             Integer hreatbeatDelay) {
         this.id = id;
         this.service = service;
         this.sessionCallback = sessionCallback;
         this.scheduledExecutor = scheduledExecutor;
         this.timeoutDelay = timeoutDelay;
-        this.heartbeatRequired = heartbeatActivated;
         this.hreatbeatDelay = hreatbeatDelay;
 
         if (LOGGER.isDebugEnabled())
@@ -82,7 +82,7 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
                 LOGGER.debug("Session " + id + " already have a channel connected.");
 
             event.getChannel().write(Frame.closeFrame(2010, "Another connection still open"))
-                    .addListener(ChannelFutureListener.CLOSE);
+            .addListener(ChannelFutureListener.CLOSE);
             return;
         }
 
@@ -102,8 +102,6 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
         if (state == State.CONNECTING) {
             channel.write(Frame.openFrame());
             setState(State.OPEN);
-            // FIXME: Ability to reject a connection here by returning false in
-            // callback to onOpen?
             sessionCallback.onOpen(this);
         }
 
@@ -122,45 +120,41 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
     }
 
     @Override
-    public synchronized void writeRequested(ChannelHandlerContext ctx, MessageEvent e) throws Exception {
-        if (LOGGER.isDebugEnabled() && e.getMessage() instanceof Frame) {
-            Frame f = (Frame) e.getMessage();
-            String data = f.getData().toString(CharsetUtil.UTF_8);
-            LOGGER.debug("Session " + id + " for channel " + e.getChannel() + " sending: " + data);
+    public synchronized void messageReceived(ChannelHandlerContext context, MessageEvent event) throws Exception {
+        if (!(event.getMessage() instanceof MessageFrame)) {
+            throw new IllegalArgumentException("Unexpected message type: " + event.getMessage().getClass());
         }
-        super.writeRequested(ctx, e);
-    }
-
-    @Override
-    public synchronized void messageReceived(ChannelHandlerContext ctx, MessageEvent e) throws Exception {
         if (state == State.OPEN) {
-            SockJsMessage msg = (SockJsMessage) e.getMessage();
-
-            if (LOGGER.isDebugEnabled())
-                LOGGER.debug("Session " + id + " received message: " + msg.getMessage());
-
-            sessionCallback.onMessage(this, msg.getMessage());
+            MessageFrame messageFrame;
+            messageFrame = (MessageFrame) event.getMessage();
+            for(String message : messageFrame.getMessages()) {
+                if (LOGGER.isDebugEnabled())
+                    LOGGER.debug("Session " + id + " received message: " + message);
+                sessionCallback.onMessage(this, message);
+            }
         }
     }
 
     @Override
-    public synchronized void exceptionCaught(ChannelHandlerContext ctx, ExceptionEvent e) throws Exception {
-        if (ctx.getChannel().isOpen()) {
-            ctx.getChannel().close();
+    public synchronized void exceptionCaught(ChannelHandlerContext context, ExceptionEvent event) throws Exception {
+        if (context.getChannel().isOpen()) {
+            context.getChannel().close();
         }
         if (state != State.CLOSED) {
+            State previousState = state;
             tryCancelTimeout();
             setState(State.CLOSED);
             service.removeSession(this);
-            sessionCallback.onClose(this);
-            sessionCallback.onError(this, e.getCause());
+            if(previousState == State.OPEN) {
+                sessionCallback.onClose(this);
+            }
+            sessionCallback.onError(this, event.getCause());
         }
     }
 
     @Override
     public synchronized void send(String message) {
-        SockJsMessage msg = new SockJsMessage(message);
-        messageQueue.addLast(msg);
+        messageQueue.addLast(message);
         tryFlush();
     }
 
@@ -193,6 +187,8 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
                     }
 
                 });
+            } else {
+                scheduleTimeout();
             }
         }
     }
@@ -251,8 +247,8 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
     private ChannelFuture doFlush(Channel channel) {
         ChannelFuture future;
 
-        SockJsMessage[] flushableMessages;
-        flushableMessages = messageQueue.toArray(new SockJsMessage[messageQueue.size()]);
+        String[] flushableMessages;
+        flushableMessages = messageQueue.toArray(new String[messageQueue.size()]);
 
         if (flushableMessages.length > 0) {
             messageQueue.clear();
@@ -327,12 +323,8 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
     }
 
     private void scheduleTimeout() {
-        if (!heartbeatRequired) {
-            return;
-        }
-
         if (timeoutFuture != null) {
-            throw new IllegalStateException("timeout is already scheduled");
+            tryCancelTimeout();
         }
 
         timeoutFuture = scheduledExecutor.schedule(new Runnable() {
@@ -364,15 +356,10 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
     }
 
     public static class NotFoundException extends Exception {
+        private static final long serialVersionUID = 1L;
+
         public NotFoundException(String baseUrl, String sessionId) {
             super("Session '" + sessionId + "' not found in sessionCallback '" + baseUrl + "'");
-        }
-    }
-
-    public static class LockException extends Exception {
-        public LockException(Channel channel) {
-            super("Session is locked by channel " + channel
-                + ". Please disconnect other channel first before trying to register it with a session.");
         }
     }
 

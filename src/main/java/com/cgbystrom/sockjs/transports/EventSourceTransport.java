@@ -1,16 +1,24 @@
 package com.cgbystrom.sockjs.transports;
 
-import com.cgbystrom.sockjs.Frame;
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
-import org.jboss.netty.channel.*;
-import org.jboss.netty.handler.codec.http.*;
+import org.jboss.netty.channel.ChannelHandlerContext;
+import org.jboss.netty.channel.DownstreamMessageEvent;
+import org.jboss.netty.channel.MessageEvent;
+import org.jboss.netty.handler.codec.http.DefaultHttpChunk;
+import org.jboss.netty.handler.codec.http.HttpResponse;
 import org.jboss.netty.logging.InternalLogger;
 import org.jboss.netty.logging.InternalLoggerFactory;
 import org.jboss.netty.util.CharsetUtil;
 
+import com.cgbystrom.sockjs.frames.Frame;
+import com.cgbystrom.sockjs.frames.FrameEncoder;
+
 public class EventSourceTransport extends StreamingTransport {
+
+    @SuppressWarnings("unused")
     private static final InternalLogger LOGGER = InternalLoggerFactory.getInstance(EventSourceTransport.class);
+
     private static final ChannelBuffer NEW_LINE = ChannelBuffers.copiedBuffer("\r\n", CharsetUtil.UTF_8);
     private static final ChannelBuffer FRAME_BEGIN = ChannelBuffers.copiedBuffer("data: ", CharsetUtil.UTF_8);
     private static final ChannelBuffer FRAME_END = ChannelBuffers.copiedBuffer("\r\n\r\n", CharsetUtil.UTF_8);
@@ -30,7 +38,7 @@ public class EventSourceTransport extends StreamingTransport {
                 ctx.sendDownstream(new DownstreamMessageEvent(e.getChannel(), e.getFuture(), new DefaultHttpChunk(NEW_LINE), e.getRemoteAddress()));
             }
 
-            ChannelBuffer wrappedContent = ChannelBuffers.wrappedBuffer(FRAME_BEGIN, Frame.encode(frame, false), FRAME_END);
+            ChannelBuffer wrappedContent = ChannelBuffers.wrappedBuffer(FRAME_BEGIN, FrameEncoder.encode(frame, false), FRAME_END);
             ctx.sendDownstream(new DownstreamMessageEvent(e.getChannel(), e.getFuture(), new DefaultHttpChunk(wrappedContent), e.getRemoteAddress()));
             logResponseSize(e.getChannel(), wrappedContent);
         } else {

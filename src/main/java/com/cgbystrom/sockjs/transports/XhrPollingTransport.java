@@ -1,22 +1,31 @@
 package com.cgbystrom.sockjs.transports;
 
-import com.cgbystrom.sockjs.*;
+import static org.jboss.netty.handler.codec.http.HttpHeaders.Names.CONNECTION;
+import static org.jboss.netty.handler.codec.http.HttpHeaders.Names.CONTENT_LENGTH;
+import static org.jboss.netty.handler.codec.http.HttpHeaders.Values.CLOSE;
+
 import org.jboss.netty.buffer.ChannelBuffer;
-import org.jboss.netty.channel.*;
-import org.jboss.netty.handler.codec.http.*;
+import org.jboss.netty.channel.ChannelFutureListener;
+import org.jboss.netty.channel.ChannelHandlerContext;
+import org.jboss.netty.channel.DownstreamMessageEvent;
+import org.jboss.netty.channel.MessageEvent;
+import org.jboss.netty.handler.codec.http.HttpResponse;
 import org.jboss.netty.logging.InternalLogger;
 import org.jboss.netty.logging.InternalLoggerFactory;
-import static org.jboss.netty.handler.codec.http.HttpHeaders.Names.*;
-import static org.jboss.netty.handler.codec.http.HttpHeaders.Values.*;
+
+import com.cgbystrom.sockjs.frames.Frame;
+import com.cgbystrom.sockjs.frames.FrameEncoder;
 
 public class XhrPollingTransport extends BaseTransport {
-    private static final InternalLogger logger = InternalLoggerFactory.getInstance(XhrPollingTransport.class);
+
+    @SuppressWarnings("unused")
+    private static final InternalLogger LOGGER = InternalLoggerFactory.getInstance(XhrPollingTransport.class);
 
     @Override
     public void writeRequested(ChannelHandlerContext ctx, MessageEvent e) throws Exception {
         if (e.getMessage() instanceof Frame) {
             Frame frame = (Frame) e.getMessage();
-            ChannelBuffer content = Frame.encode(frame, true);
+            ChannelBuffer content = FrameEncoder.encode(frame, true);
             HttpResponse response = createResponse(CONTENT_TYPE_JAVASCRIPT);
             response.setHeader(CONTENT_LENGTH, content.readableBytes());
             response.setHeader(CONNECTION, CLOSE);

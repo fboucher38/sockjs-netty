@@ -36,6 +36,7 @@ import com.cgbystrom.sockjs.transports.BaseTransport;
 import com.cgbystrom.sockjs.transports.EventSourceTransport;
 import com.cgbystrom.sockjs.transports.HtmlFileTransport;
 import com.cgbystrom.sockjs.transports.JsonpPollingTransport;
+import com.cgbystrom.sockjs.transports.JsonpSendTransport;
 import com.cgbystrom.sockjs.transports.RawWebSocketTransport;
 import com.cgbystrom.sockjs.transports.WebSocketTransport;
 import com.cgbystrom.sockjs.transports.XhrPollingTransport;
@@ -108,7 +109,7 @@ public class ServiceRouter extends SimpleChannelHandler {
         } else if (path.startsWith("/websocket")) {
             // Raw web socket
             SessionHandler sessionHandler;
-            sessionHandler = service.forceCreateSession("rawwebsocket-" + RANDOM.nextLong(), false);
+            sessionHandler = service.forceCreateSession("rawwebsocket-" + RANDOM.nextLong());
             ctx.getPipeline().addLast("sockjs-websocket", new RawWebSocketTransport(path));
             ctx.getPipeline().addLast("sockjs-session-handler", sessionHandler);
         } else {
@@ -134,15 +135,12 @@ public class ServiceRouter extends SimpleChannelHandler {
 
         ChannelPipeline pipeline = ctx.getPipeline();
         SessionCreation sessionCreation = SessionCreation.CREATE_OR_REUSE;
-        boolean heartbeatRequired = true;
         if (transport.equals("/xhr_send")) {
-            pipeline.addLast("sockjs-xhr-send", new XhrSendTransport(false));
-            sessionCreation = SessionCreation.FORCE_REUSE; // Expect an existing
-                                                           // session
+            pipeline.addLast("sockjs-xhr-send", new XhrSendTransport());
+            sessionCreation = SessionCreation.FORCE_REUSE; // Expect an existing session
         } else if (transport.equals("/jsonp_send")) {
-            pipeline.addLast("sockjs-jsonp-send", new XhrSendTransport(true));
-            sessionCreation = SessionCreation.FORCE_REUSE; // Expect an existing
-                                                           // session
+            pipeline.addLast("sockjs-jsonp-send", new JsonpSendTransport());
+            sessionCreation = SessionCreation.FORCE_REUSE; // Expect an existing session
         } else if (transport.equals("/xhr_streaming")) {
             pipeline.addLast("sockjs-xhr-streaming", new XhrStreamingTransport(service.getMaxResponseSize()));
         } else if (transport.equals("/xhr")) {
@@ -154,10 +152,9 @@ public class ServiceRouter extends SimpleChannelHandler {
         } else if (transport.equals("/eventsource")) {
             pipeline.addLast("sockjs-eventsource", new EventSourceTransport(service.getMaxResponseSize()));
         } else if (transport.equals("/websocket")) {
-            pipeline.addLast("sockjs-websocket", new WebSocketTransport(service.getUrl() + path, service));
+            pipeline.addLast("sockjs-websocket", new WebSocketTransport(service.getUrl() + path));
             // Websockets should re-create a session every time
             sessionCreation = SessionCreation.FORCE_CREATE;
-            heartbeatRequired = false;
         } else {
             return false;
         }
@@ -165,13 +162,13 @@ public class ServiceRouter extends SimpleChannelHandler {
         SessionHandler sessionHandler = null;
         switch (sessionCreation) {
             case CREATE_OR_REUSE:
-                sessionHandler = service.getOrCreateSession(sessionId, heartbeatRequired);
+                sessionHandler = service.getOrCreateSession(sessionId);
                 break;
             case FORCE_REUSE:
                 sessionHandler = service.getSession(sessionId);
                 break;
             case FORCE_CREATE:
-                sessionHandler = service.forceCreateSession(sessionId, heartbeatRequired);
+                sessionHandler = service.forceCreateSession(sessionId);
                 break;
             default:
                 throw new Exception("Unknown sessionCreation value: " + sessionCreation);

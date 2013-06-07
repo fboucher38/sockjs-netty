@@ -1,18 +1,24 @@
 package com.cgbystrom.sockjs.transports;
 
-import org.jboss.netty.buffer.ChannelBuffer;
-import org.jboss.netty.channel.*;
-import org.jboss.netty.handler.codec.http.*;
-
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import org.jboss.netty.buffer.ChannelBuffer;
+import org.jboss.netty.channel.Channel;
+import org.jboss.netty.channel.ChannelFutureListener;
+import org.jboss.netty.channel.ChannelHandlerContext;
+import org.jboss.netty.channel.ChannelStateEvent;
+import org.jboss.netty.handler.codec.http.HttpChunk;
+import org.jboss.netty.handler.codec.http.HttpHeaders;
+import org.jboss.netty.handler.codec.http.HttpResponse;
+import org.jboss.netty.handler.codec.http.HttpVersion;
 
 /**
  * Base class for streaming transports
  *
  * Handles HTTP chunking and response size limiting for browser "garbage collection".
  */
-public class StreamingTransport extends BaseTransport {
+public abstract class StreamingTransport extends BaseTransport {
     /**
      *  Max size of response content sent before closing the connection.
      *  Since browsers buffer chunked/streamed content in-memory the connection must be closed
@@ -27,7 +33,7 @@ public class StreamingTransport extends BaseTransport {
     protected AtomicBoolean headerSent = new AtomicBoolean(false);
 
     /** Keep track if ending HTTP chunk has been sent */
-    private AtomicBoolean lastChunkSent = new AtomicBoolean(false);
+    private final AtomicBoolean lastChunkSent = new AtomicBoolean(false);
 
     public StreamingTransport() {
         this.maxResponseSize = 128 * 1024; // 128 KiB
