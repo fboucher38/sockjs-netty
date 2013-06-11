@@ -20,6 +20,7 @@ import org.jboss.netty.channel.ChannelFuture;
 import org.jboss.netty.channel.ChannelFutureListener;
 import org.jboss.netty.channel.ChannelHandlerContext;
 import org.jboss.netty.channel.ChannelPipeline;
+import org.jboss.netty.channel.ExceptionEvent;
 import org.jboss.netty.channel.MessageEvent;
 import org.jboss.netty.channel.SimpleChannelHandler;
 import org.jboss.netty.handler.codec.http.DefaultHttpResponse;
@@ -85,6 +86,19 @@ public class ServiceRouter extends SimpleChannelHandler {
         HttpResponse response = new DefaultHttpResponse(request.getProtocolVersion(), HttpResponseStatus.NOT_FOUND);
         response.setContent(ChannelBuffers.copiedBuffer("Not found", CharsetUtil.UTF_8));
         writeResponse(e.getChannel(), request, response);
+    }
+
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, ExceptionEvent e) throws Exception {
+        if(this == ctx.getPipeline().getLast()) {
+            if(ctx.getChannel().isOpen()) {
+                ctx.getChannel().close();
+            }
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug("exceptionCaught before initialize SockJs pipeline:", e.getCause());
+            }
+        }
+        super.exceptionCaught(ctx, e);
     }
 
     private void handleService(ChannelHandlerContext ctx, MessageEvent e, Service service) throws Exception {
