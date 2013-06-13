@@ -28,7 +28,6 @@ import org.jboss.netty.handler.codec.http.HttpHeaders;
 import org.jboss.netty.handler.codec.http.HttpRequest;
 import org.jboss.netty.handler.codec.http.HttpResponse;
 import org.jboss.netty.handler.codec.http.HttpResponseStatus;
-import org.jboss.netty.handler.codec.http.QueryStringDecoder;
 import org.jboss.netty.logging.InternalLogger;
 import org.jboss.netty.logging.InternalLoggerFactory;
 import org.jboss.netty.util.CharsetUtil;
@@ -70,12 +69,14 @@ public class ServiceRouter extends SimpleChannelHandler {
     @Override
     public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) throws Exception {
         HttpRequest request = (HttpRequest) e.getMessage();
+        String requestUri = request.getUri();
+
         if (LOGGER.isDebugEnabled())
-            LOGGER.debug("URI " + request.getUri());
+            LOGGER.debug("URI " + requestUri);
 
         for (Service service : services) {
             // Check if there's a service registered with this URL
-            if (request.getUri().startsWith(service.getUrl())) {
+            if (requestUri.startsWith(service.getUrl())) {
                 handleService(ctx, e, service);
                 super.messageReceived(ctx, e);
                 return;
@@ -97,37 +98,36 @@ public class ServiceRouter extends SimpleChannelHandler {
             if (LOGGER.isDebugEnabled()) {
                 LOGGER.debug("exceptionCaught before initialize SockJs pipeline:", e.getCause());
             }
+        } else {
+            ctx.sendUpstream(e);
         }
-        super.exceptionCaught(ctx, e);
     }
 
     private void handleService(ChannelHandlerContext ctx, MessageEvent e, Service service) throws Exception {
         HttpRequest request = (HttpRequest) e.getMessage();
-        request.setUri(request.getUri().replaceFirst(service.getUrl(), ""));
-        QueryStringDecoder qsd = new QueryStringDecoder(request.getUri());
-        String path = qsd.getPath();
+        String requestUriSuffix = request.getUri().replaceFirst(service.getUrl(), "");
 
         HttpResponse response = new DefaultHttpResponse(request.getProtocolVersion(), HttpResponseStatus.OK);
-        if (path.equals("") || path.equals("/")) {
+        if (requestUriSuffix.equals("") || requestUriSuffix.equals("/")) {
             response.setHeader(CONTENT_TYPE, BaseTransport.CONTENT_TYPE_PLAIN);
             response.setContent(ChannelBuffers.copiedBuffer("Welcome to SockJS!\n", CharsetUtil.UTF_8));
             writeResponse(e.getChannel(), request, response);
-        } else if (path.startsWith("/iframe")) {
+        } else if (requestUriSuffix.startsWith("/iframe")) {
             iframe.handle(request, response);
             writeResponse(e.getChannel(), request, response);
-        } else if (path.startsWith("/info")) {
+        } else if (requestUriSuffix.startsWith("/info")) {
             response.setHeader(CONTENT_TYPE, "application/json; charset=UTF-8");
             response.setHeader(CACHE_CONTROL, "no-store, no-cache, must-revalidate, max-age=0");
             response.setContent(formatInfoForService(service));
             writeResponse(e.getChannel(), request, response);
-        } else if (path.startsWith("/websocket")) {
+        } else if (requestUriSuffix.startsWith("/websocket")) {
             // Raw web socket
             SessionHandler sessionHandler;
             sessionHandler = service.forceCreateSession("rawwebsocket-" + RANDOM.nextLong());
-            ctx.getPipeline().addLast("sockjs-websocket", new RawWebSocketTransport(path));
+            ctx.getPipeline().addLast("sockjs-websocket", new RawWebSocketTransport(requestUriSuffix));
             ctx.getPipeline().addLast("sockjs-session-handler", sessionHandler);
         } else {
-            if (!handleSession(ctx, e, path, service)) {
+            if (!handleSession(ctx, e, requestUriSuffix, service)) {
                 response.setStatus(HttpResponseStatus.NOT_FOUND);
                 response.setContent(ChannelBuffers.copiedBuffer("Not found", CharsetUtil.UTF_8));
                 writeResponse(e.getChannel(), request, response);
