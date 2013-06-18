@@ -1,7 +1,6 @@
 package com.cgbystrom.sockjs.transports;
 
 import org.jboss.netty.buffer.ChannelBuffer;
-import org.jboss.netty.channel.ChannelFutureListener;
 import org.jboss.netty.channel.ChannelHandlerContext;
 import org.jboss.netty.channel.Channels;
 import org.jboss.netty.channel.DownstreamMessageEvent;
@@ -24,28 +23,28 @@ public class XhrStreamingTransport extends StreamingTransport {
     }
 
     @Override
-    public void writeRequested(ChannelHandlerContext ctx, MessageEvent e) throws Exception {
-        if (e.getMessage() instanceof Frame) {
+    public void writeRequested(ChannelHandlerContext context, MessageEvent event) throws Exception {
+        if (event.getMessage() instanceof Frame[]) {
+            Frame[] frames = (Frame[]) event.getMessage();
+
             if (headerSent.compareAndSet(false, true)) {
                 HttpResponse response = createResponse(CONTENT_TYPE_JAVASCRIPT);
-                ctx.sendDownstream(new DownstreamMessageEvent(e.getChannel(), Channels.future(e.getChannel()), response, e.getRemoteAddress()));
+                context.sendDownstream(new DownstreamMessageEvent(event.getChannel(), Channels.future(event.getChannel()), response, event.getRemoteAddress()));
 
                 // IE requires 2KB prefix:
                 // http://blogs.msdn.com/b/ieinternals/archive/2010/04/06/comet-streaming-in-internet-explorer-with-xmlhttprequest-and-xdomainrequest.aspx
                 DefaultHttpChunk message = new DefaultHttpChunk(FrameEncoder.encode(Frame.preludeFrame(), true));
-                ctx.sendDownstream(new DownstreamMessageEvent(e.getChannel(), Channels.future(e.getChannel()), message, e.getRemoteAddress()));
-            }
-            final Frame frame = (Frame) e.getMessage();
-            ChannelBuffer content = FrameEncoder.encode(frame, true);
-
-            if (frame instanceof Frame.CloseFrame) {
-                e.getFuture().addListener(ChannelFutureListener.CLOSE);
+                context.sendDownstream(new DownstreamMessageEvent(event.getChannel(), Channels.future(event.getChannel()), message, event.getRemoteAddress()));
             }
 
-            ctx.sendDownstream(new DownstreamMessageEvent(e.getChannel(), e.getFuture(), new DefaultHttpChunk(content), e.getRemoteAddress()));
-            logResponseSize(e.getChannel(), content);
+            for(Frame frame : frames) {
+                ChannelBuffer content = FrameEncoder.encode(frame, true);
+                Channels.write(context, event.getFuture(), new DefaultHttpChunk(content));
+            }
+
         } else {
-            super.writeRequested(ctx, e);
+            super.writeRequested(context, event);
         }
     }
+
 }

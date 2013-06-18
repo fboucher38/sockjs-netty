@@ -45,7 +45,7 @@ import com.cgbystrom.sockjs.transports.XhrStreamingTransport;
 
 public class ServiceRouter extends SimpleChannelHandler {
     private static final InternalLogger LOGGER         = InternalLoggerFactory.getInstance(ServiceRouter.class);
-    private static final Pattern        SERVER_SESSION = Pattern.compile("^/([^/.]+)/([^/.]+)/");
+    private static final Pattern        SERVER_SESSION = Pattern.compile("^/([^/.]+)/([^/.]+)/([^?.]+)");
     private static final Random         RANDOM         = new Random();
 
     private enum SessionCreation {
@@ -143,29 +143,28 @@ public class ServiceRouter extends SimpleChannelHandler {
             return false;
         }
 
-        String server = m.group(1);
         String sessionId = m.group(2);
-        String transport = path.replaceFirst("/" + server + "/" + sessionId, "");
+        String transport = m.group(3);
 
         ChannelPipeline pipeline = ctx.getPipeline();
         SessionCreation sessionCreation = SessionCreation.CREATE_OR_REUSE;
-        if (transport.equals("/xhr_send")) {
+        if (transport.equals("xhr_send")) {
             pipeline.addLast("sockjs-xhr-send", new XhrSendTransport());
             sessionCreation = SessionCreation.FORCE_REUSE; // Expect an existing session
-        } else if (transport.equals("/jsonp_send")) {
+        } else if (transport.equals("jsonp_send")) {
             pipeline.addLast("sockjs-jsonp-send", new JsonpSendTransport());
             sessionCreation = SessionCreation.FORCE_REUSE; // Expect an existing session
-        } else if (transport.equals("/xhr_streaming")) {
+        } else if (transport.equals("xhr_streaming")) {
             pipeline.addLast("sockjs-xhr-streaming", new XhrStreamingTransport(service.getMaxResponseSize()));
-        } else if (transport.equals("/xhr")) {
+        } else if (transport.equals("xhr")) {
             pipeline.addLast("sockjs-xhr-polling", new XhrPollingTransport());
-        } else if (transport.equals("/jsonp")) {
+        } else if (transport.equals("jsonp")) {
             pipeline.addLast("sockjs-jsonp-polling", new JsonpPollingTransport());
-        } else if (transport.equals("/htmlfile")) {
+        } else if (transport.equals("htmlfile")) {
             pipeline.addLast("sockjs-htmlfile-polling", new HtmlFileTransport(service.getMaxResponseSize()));
-        } else if (transport.equals("/eventsource")) {
+        } else if (transport.equals("eventsource")) {
             pipeline.addLast("sockjs-eventsource", new EventSourceTransport(service.getMaxResponseSize()));
-        } else if (transport.equals("/websocket")) {
+        } else if (transport.equals("websocket")) {
             pipeline.addLast("sockjs-websocket", new WebSocketTransport(service.getUrl() + path));
             // Websockets should re-create a session every time
             sessionCreation = SessionCreation.FORCE_CREATE;

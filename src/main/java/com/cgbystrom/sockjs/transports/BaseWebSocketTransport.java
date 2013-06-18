@@ -81,8 +81,10 @@ public abstract class BaseWebSocketTransport extends SimpleChannelHandler {
 
     @Override
     public void writeRequested(ChannelHandlerContext context, MessageEvent event) throws Exception {
-        if (event.getMessage() instanceof Frame) {
-            handleWroteSockJsFrame(context, event, (Frame) event.getMessage());
+        if (event.getMessage() instanceof Frame[]) {
+            for(Frame frame : (Frame[]) event.getMessage()) {
+                handleWroteSockJsFrame(context, event, frame);
+            }
         } else {
             super.writeRequested(context, event);
         }

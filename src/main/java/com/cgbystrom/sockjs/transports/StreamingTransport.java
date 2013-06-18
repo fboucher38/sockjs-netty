@@ -1,13 +1,12 @@
 package com.cgbystrom.sockjs.transports;
 
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
-import org.jboss.netty.buffer.ChannelBuffer;
-import org.jboss.netty.channel.Channel;
 import org.jboss.netty.channel.ChannelFutureListener;
 import org.jboss.netty.channel.ChannelHandlerContext;
 import org.jboss.netty.channel.ChannelStateEvent;
+import org.jboss.netty.channel.WriteCompletionEvent;
 import org.jboss.netty.handler.codec.http.HttpChunk;
 import org.jboss.netty.handler.codec.http.HttpHeaders;
 import org.jboss.netty.handler.codec.http.HttpResponse;
@@ -24,10 +23,10 @@ public abstract class StreamingTransport extends BaseTransport {
      *  Since browsers buffer chunked/streamed content in-memory the connection must be closed
      *  at regular intervals. Call it "garbage collection" if you will.
      */
-    protected final int maxResponseSize;
+    protected final long maxResponseSize;
 
     /** Track size of content chunks sent to the browser. */
-    protected AtomicInteger numBytesSent = new AtomicInteger(0);
+    protected AtomicLong numBytesSent = new AtomicLong(0);
 
     /** For streaming/chunked transports we need to send HTTP header only once (naturally) */
     protected AtomicBoolean headerSent = new AtomicBoolean(false);
@@ -53,13 +52,13 @@ public abstract class StreamingTransport extends BaseTransport {
         }
     }
 
-    protected void logResponseSize(Channel channel, ChannelBuffer content) {
-        numBytesSent.addAndGet(content.readableBytes());
-
-        if (numBytesSent.get() >= maxResponseSize) {
+    @Override
+    public void writeComplete(ChannelHandlerContext context, WriteCompletionEvent event) throws Exception {
+        if (numBytesSent.addAndGet(event.getWrittenAmount()) >= maxResponseSize) {
             // Close the connection to allow the browser to flush in-memory buffered content from this XHR stream.
-            channel.close();
+            event.getFuture().addListener(ChannelFutureListener.CLOSE);
         }
+        super.writeComplete(context, event);
     }
 
     @Override

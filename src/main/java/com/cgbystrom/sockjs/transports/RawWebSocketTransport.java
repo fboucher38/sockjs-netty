@@ -1,5 +1,6 @@
 package com.cgbystrom.sockjs.transports;
 
+import org.jboss.netty.channel.ChannelFutureListener;
 import org.jboss.netty.channel.ChannelHandlerContext;
 import org.jboss.netty.channel.DownstreamMessageEvent;
 import org.jboss.netty.channel.MessageEvent;
@@ -32,7 +33,7 @@ public class RawWebSocketTransport extends BaseWebSocketTransport {
                 context.sendUpstream(new UpstreamMessageEvent(event.getChannel(), textWebSocketFrame, event.getRemoteAddress()));
             }
         } else if(frame instanceof CloseFrame) {
-            context.getChannel().close();
+            event.getFuture().addListener(ChannelFutureListener.CLOSE);
         }
     }
 

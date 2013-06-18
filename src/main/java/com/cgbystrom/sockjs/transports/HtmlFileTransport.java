@@ -7,7 +7,7 @@ import java.util.List;
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
 import org.jboss.netty.channel.ChannelHandlerContext;
-import org.jboss.netty.channel.DownstreamMessageEvent;
+import org.jboss.netty.channel.Channels;
 import org.jboss.netty.channel.MessageEvent;
 import org.jboss.netty.handler.codec.http.DefaultHttpChunk;
 import org.jboss.netty.handler.codec.http.HttpRequest;
@@ -64,9 +64,10 @@ public class HtmlFileTransport extends StreamingTransport {
     }
 
     @Override
-    public void writeRequested(ChannelHandlerContext ctx, MessageEvent e) throws Exception {
-        if (e.getMessage() instanceof Frame) {
-            final Frame frame = (Frame) e.getMessage();
+    public void writeRequested(ChannelHandlerContext context, MessageEvent event) throws Exception {
+        if (event.getMessage() instanceof Frame[]) {
+            Frame[] frames = (Frame[]) event.getMessage();
+
             if (headerSent.compareAndSet(false, true)) {
                 HttpResponse response = createResponse(CONTENT_TYPE_HTML);
                 response.setHeader(CACHE_CONTROL, "no-store, no-cache, must-revalidate, max-age=0");
@@ -86,19 +87,20 @@ public class HtmlFileTransport extends StreamingTransport {
                 paddedHeader.writeByte('\r');
                 paddedHeader.writeByte('\n');
 
-                ctx.sendDownstream(new DownstreamMessageEvent(e.getChannel(), e.getFuture(), response, e.getRemoteAddress()));
-                ctx.sendDownstream(new DownstreamMessageEvent(e.getChannel(), e.getFuture(), new DefaultHttpChunk(paddedHeader), e.getRemoteAddress()));
+                Channels.write(context, event.getFuture(), response);
+                Channels.write(context, event.getFuture(), new DefaultHttpChunk(paddedHeader));
             }
 
-            final ChannelBuffer frameContent = FrameEncoder.encode(frame, false);
-            final ChannelBuffer content = ChannelBuffers.dynamicBuffer(frameContent.readableBytes() + 10);
-            FrameEncoder.escapeJson(frameContent, content);
-            ChannelBuffer wrappedContent = ChannelBuffers.wrappedBuffer(PREFIX, content, POSTFIX);
-            ctx.sendDownstream(new DownstreamMessageEvent(e.getChannel(), e.getFuture(), new DefaultHttpChunk(wrappedContent), e.getRemoteAddress()));
+            for(Frame frame : frames) {
+                ChannelBuffer frameContent = FrameEncoder.encode(frame, false);
+                ChannelBuffer content = ChannelBuffers.dynamicBuffer(frameContent.readableBytes() + 10);
+                FrameEncoder.escapeJson(frameContent, content);
+                ChannelBuffer wrappedContent = ChannelBuffers.wrappedBuffer(PREFIX, content, POSTFIX);
+                Channels.write(context, event.getFuture(), new DefaultHttpChunk(wrappedContent));
+            }
 
-            logResponseSize(e.getChannel(), content);
         } else {
-            super.writeRequested(ctx, e);
+            super.writeRequested(context, event);
         }
     }
 }

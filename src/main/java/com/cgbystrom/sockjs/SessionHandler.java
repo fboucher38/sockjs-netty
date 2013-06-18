@@ -5,13 +5,12 @@ import java.util.LinkedList;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.jboss.netty.channel.Channel;
-import org.jboss.netty.channel.ChannelFuture;
 import org.jboss.netty.channel.ChannelFutureListener;
 import org.jboss.netty.channel.ChannelHandlerContext;
 import org.jboss.netty.channel.ChannelStateEvent;
-import org.jboss.netty.channel.Channels;
 import org.jboss.netty.channel.ExceptionEvent;
 import org.jboss.netty.channel.MessageEvent;
 import org.jboss.netty.channel.SimpleChannelHandler;
@@ -19,6 +18,7 @@ import org.jboss.netty.logging.InternalLogger;
 import org.jboss.netty.logging.InternalLoggerFactory;
 
 import com.cgbystrom.sockjs.frames.Frame;
+import com.cgbystrom.sockjs.frames.Frame.CloseFrame;
 import com.cgbystrom.sockjs.frames.Frame.MessageFrame;
 
 /**
@@ -37,94 +37,107 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
 
     private final String                    id;
     private final Service                   service;
-    private final LinkedList<String>        messageQueue = new LinkedList<String>();
+    private final FrameQueue                frameQueue = new FrameQueue();
     private final SessionCallback           sessionCallback;
     private final ScheduledExecutorService  scheduledExecutor;
     private final Integer                   timeoutDelay;
     private final Integer                   hreatbeatDelay;
 
-    private Channel                         channel;
+    private final AtomicReference<Channel>  channel;
+    private final AtomicReference<State>    state;
+
+    private CloseFrame                      closeFrame;
     private SocketAddress                   localAddress;
     private SocketAddress                   remoteAddress;
-    private State                           state        = State.CONNECTING;
-    private Frame.CloseFrame                closeReason;
     private Future<?>                       timeoutFuture;
     private Future<?>                       heartbeatFuture;
 
     protected SessionHandler(Service service, String id, SessionCallback sessionCallback,
                              ScheduledExecutorService scheduledExecutor, Integer timeoutDelay,
                              Integer hreatbeatDelay) {
+
+        if (LOGGER.isDebugEnabled())
+            LOGGER.debug("Session " + id + " created");
+
         this.id = id;
         this.service = service;
         this.sessionCallback = sessionCallback;
         this.scheduledExecutor = scheduledExecutor;
         this.timeoutDelay = timeoutDelay;
         this.hreatbeatDelay = hreatbeatDelay;
-
-        if (LOGGER.isDebugEnabled())
-            LOGGER.debug("Session " + id + " created");
+        this.state = new AtomicReference<State>(State.CONNECTING);
+        this.channel = new AtomicReference<Channel>(null);
     }
 
     @Override
-    public synchronized void channelConnected(ChannelHandlerContext context, ChannelStateEvent event) throws Exception {
+    public void channelConnected(ChannelHandlerContext context, ChannelStateEvent event) throws Exception {
+        Channel newChannel;
+        newChannel = event.getChannel();
+
         if (LOGGER.isDebugEnabled())
-            LOGGER.debug("Session " + id + " connected " + event.getChannel());
+            LOGGER.debug("Session " + id + " connected " + newChannel);
 
-        // FIXME: Check if session is locked (another handler already uses it),
-        // all but WS can do this
-
-        if (state == State.CLOSED) {
+        if (state.get() == State.CLOSED) {
             throw new IllegalStateException("session already closed");
         }
 
-        if (channel != null) {
+        if (channel.get() != null) {
             if (LOGGER.isDebugEnabled())
                 LOGGER.debug("Session " + id + " already have a channel connected.");
 
-            event.getChannel().write(Frame.closeFrame(2010, "Another connection still open"))
+            newChannel.write(new Frame[] { Frame.closeFrame(2010, "Another connection still open") })
             .addListener(ChannelFutureListener.CLOSE);
             return;
         }
 
         tryCancelTimeout();
 
-        if (state == State.CLOSING) {
-            doClose(event.getChannel());
-            setState(State.CLOSED);
+        if (state.compareAndSet(State.CLOSING, State.CLOSED)) {
+            newChannel.write(new Frame[] { Frame.messageFrame(frameQueue.getAndClear()), closeFrame })
+            .addListener(ChannelFutureListener.CLOSE);
             service.removeSession(SessionHandler.this);
             sessionCallback.onClose(SessionHandler.this);
             return;
         }
 
-        setChannel(event.getChannel());
-        scheduleHeartbeat();
+        if (channel.compareAndSet(null, newChannel)) {
+            localAddress = newChannel.getLocalAddress();
+            remoteAddress = newChannel.getRemoteAddress();
+            scheduleHeartbeat();
+        } else {
+            new IllegalStateException("null channel expected");
+        }
 
-        if (state == State.CONNECTING) {
-            channel.write(Frame.openFrame());
-            setState(State.OPEN);
+        if (state.compareAndSet(State.CONNECTING, State.OPEN)) {
+            newChannel.write(new Frame[] { Frame.openFrame() });
             sessionCallback.onOpen(this);
         }
 
-        tryFlush();
+        if (newChannel != null && newChannel.isOpen()) {
+            newChannel.write(new Frame[] { Frame.messageFrame(frameQueue.getAndClear()) });
+        }
     }
 
     @Override
-    public synchronized void channelClosed(ChannelHandlerContext context, ChannelStateEvent event) throws Exception {
-        if (channel != null && channel == event.getChannel()) {
-            unsetChannel(event.getChannel());
+    public void channelClosed(ChannelHandlerContext context, ChannelStateEvent event) throws Exception {
+        Channel closedChannel;
+        closedChannel = event.getChannel();
+
+        if (channel.compareAndSet(closedChannel, null)) {
             tryCancelHeartbeat();
-            if (state == State.CONNECTING || state == State.OPEN) {
+            if (state.get() == State.CONNECTING || state.get() == State.OPEN) {
                 scheduleTimeout();
             }
         }
     }
 
     @Override
-    public synchronized void messageReceived(ChannelHandlerContext context, MessageEvent event) throws Exception {
+    public void messageReceived(ChannelHandlerContext context, MessageEvent event) throws Exception {
         if (!(event.getMessage() instanceof MessageFrame)) {
             throw new IllegalArgumentException("Unexpected message type: " + event.getMessage().getClass());
         }
-        if (state == State.OPEN) {
+
+        if (state.get() == State.OPEN) {
             MessageFrame messageFrame;
             messageFrame = (MessageFrame) event.getMessage();
             for(String message : messageFrame.getMessages()) {
@@ -136,16 +149,24 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
     }
 
     @Override
-    public synchronized void exceptionCaught(ChannelHandlerContext context, ExceptionEvent event) throws Exception {
+    public void exceptionCaught(ChannelHandlerContext context, ExceptionEvent event) throws Exception {
+        if (LOGGER.isDebugEnabled())
+            LOGGER.debug("Session " + id + " exceptionCaught", event.getCause());
+
         if (context.getChannel().isOpen()) {
             context.getChannel().close();
         }
-        if (state != State.CLOSED) {
-            State previousState = state;
+
+        boolean wasNotOpened;
+        wasNotOpened = state.compareAndSet(State.CLOSING, State.CLOSED) || state.compareAndSet(State.CONNECTING, State.CLOSED);
+
+        boolean wasOpen;
+        wasOpen = state.compareAndSet(State.OPEN, State.CLOSED);
+
+        if (wasOpen || wasNotOpened) {
             tryCancelTimeout();
-            setState(State.CLOSED);
             service.removeSession(this);
-            if(previousState == State.OPEN) {
+            if(wasOpen) {
                 sessionCallback.onClose(this);
             }
             sessionCallback.onError(this, event.getCause());
@@ -153,40 +174,46 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
     }
 
     @Override
-    public synchronized void send(String message) {
-        messageQueue.addLast(message);
-        tryFlush();
+    public void send(String message) {
+        if (LOGGER.isDebugEnabled())
+            LOGGER.debug("Session " + id + " sending message: " + message);
+
+        frameQueue.put(message);
+
+        Channel flushingChannel;
+        flushingChannel = channel.get();
+        if (flushingChannel != null && flushingChannel.isOpen()) {
+            flushingChannel.write(frameQueue.getAndClear());
+        }
     }
 
     @Override
-    public synchronized void close() {
+    public void close() {
         close(1000, "Normal closure");
     }
 
     @Override
-    public synchronized void close(int code, String message) {
-        if (state != State.CLOSED) {
+    public void close(int code, String message) {
+        if (state.compareAndSet(State.CONNECTING, State.CLOSING) || state.compareAndSet(State.OPEN, State.CLOSING)) {
             if (LOGGER.isDebugEnabled())
                 LOGGER.debug("Session " + id + " server initiated close, closing...");
 
-            closeReason = Frame.closeFrame(code, message);
-            setState(State.CLOSING);
+            closeFrame = Frame.closeFrame(code, message);
 
-            if (channel != null && channel.isConnected()) {
-                doClose(channel).addListener(new ChannelFutureListener() {
+            Channel closingChannel;
+            closingChannel = channel.get();
 
-                    @Override
-                    public void operationComplete(ChannelFuture aFuture) throws Exception {
-                        if (aFuture.isSuccess()) {
-                            setState(State.CLOSED);
-                            service.removeSession(SessionHandler.this);
-                            sessionCallback.onClose(SessionHandler.this);
-                        } else {
-                            scheduleTimeout();
-                        }
-                    }
+            if (closingChannel != null && closingChannel.isOpen() && state.compareAndSet(State.CLOSING, State.CLOSED)) {
 
-                });
+                closingChannel.write(new Frame[] { Frame.messageFrame(frameQueue.getAndClear()), closeFrame })
+                .addListener(ChannelFutureListener.CLOSE);
+                service.removeSession(this);
+
+                try {
+                    sessionCallback.onClose(this);
+                } catch(Exception ex) {
+                    sessionCallback.onError(this, ex);
+                }
             } else {
                 scheduleTimeout();
             }
@@ -203,112 +230,25 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
         return remoteAddress;
     }
 
-    private void tryFlush() {
-        if (LOGGER.isDebugEnabled())
-            LOGGER.debug("Session " + id + " flushing queue");
-
-        if (channel != null && channel.isConnected()) {
-            doFlush(channel);
-        }
-    }
-
-    private ChannelFuture doClose(final Channel channel) {
-        final ChannelFuture future;
-        future = Channels.future(channel);
-
-        doFlush(channel).addListener(new ChannelFutureListener() {
-            @Override
-            public void operationComplete(ChannelFuture aFuture) throws Exception {
-                channel.write(closeReason).addListener(new ChannelFutureListener() {
-
-                    @Override
-                    public void operationComplete(ChannelFuture aFuture) throws Exception {
-                        channel.close().addListener(new ChannelFutureListener() {
-
-                            @Override
-                            public void operationComplete(ChannelFuture aFuture) throws Exception {
-                                if (aFuture.isSuccess()) {
-                                    future.setSuccess();
-                                } else {
-                                    future.setFailure(aFuture.getCause());
-                                }
-                            }
-
-                        });
-                    }
-
-                });
-            }
-        });
-
-        return future;
-    }
-
-    private ChannelFuture doFlush(Channel channel) {
-        ChannelFuture future;
-
-        String[] flushableMessages;
-        flushableMessages = messageQueue.toArray(new String[messageQueue.size()]);
-
-        if (flushableMessages.length > 0) {
-            messageQueue.clear();
-            tryCancelHeartbeat();
-            scheduleHeartbeat();
-            future = channel.write(Frame.messageFrame(flushableMessages));
-
-        } else {
-            future = Channels.succeededFuture(channel);
-        }
-
-        return future;
-    }
-
-    private void setState(State state) {
-        if (LOGGER.isDebugEnabled())
-            LOGGER.debug("Session " + id + " state changed to " + state);
-
-        this.state = state;
-    }
-
-    private void setChannel(Channel channel) {
-        if (LOGGER.isDebugEnabled())
-            LOGGER.debug("Session " + id + " channel added");
-
-        this.channel = channel;
-        this.localAddress = channel.getLocalAddress();
-        this.remoteAddress = channel.getRemoteAddress();
-    }
-
-    private void unsetChannel(Channel channel) {
-        if (this.channel != channel && this.channel != null) {
-            return;
-        }
-
-        if (LOGGER.isDebugEnabled())
-            LOGGER.debug("Session " + id + " channel removed " + channel);
-
-        this.channel = null;
-    }
-
     private void scheduleHeartbeat() {
         if (heartbeatFuture != null) {
             throw new IllegalStateException("heartbeat is already scheduled");
         }
 
+        final Channel currentChannel;
+        currentChannel = channel.get();
+
         heartbeatFuture = scheduledExecutor.scheduleWithFixedDelay(new Runnable() {
 
             @Override
             public void run() {
-                synchronized (SessionHandler.this) {
-                    if (state != State.OPEN) {
-                        throw new IllegalStateException("session must be open");
-                    }
-                    if (channel == null || !channel.isConnected()) {
-                        throw new IllegalStateException("channel must be initialized and connected");
-                    }
-
-                    channel.write(Frame.heartbeatFrame());
+                if (state.get() != State.OPEN) {
+                    throw new IllegalStateException("session must be open");
                 }
+                if (channel.get() != currentChannel) {
+                    throw new IllegalStateException("unexpected channel");
+                }
+                currentChannel.write(new Frame[] { Frame.heartbeatFrame() });
             }
 
         }, hreatbeatDelay, hreatbeatDelay, TimeUnit.MILLISECONDS);
@@ -331,17 +271,15 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
 
             @Override
             public void run() {
-                synchronized (SessionHandler.this) {
-                    if (state == State.CLOSED) {
-                        throw new IllegalStateException("session is already closed");
-                    }
-                    setState(State.CLOSED);
+                if (state.compareAndSet(State.CONNECTING, State.CLOSED) || state.compareAndSet(State.OPEN, State.CLOSED) || state.compareAndSet(State.CLOSING, State.CLOSED)) {
                     service.removeSession(SessionHandler.this);
                     try {
                         sessionCallback.onClose(SessionHandler.this);
                     } catch (Exception exception) {
                         sessionCallback.onError(SessionHandler.this, exception);
                     }
+                } else {
+                    throw new IllegalStateException("session is already closed");
                 }
             }
 
@@ -361,6 +299,25 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
         public NotFoundException(String baseUrl, String sessionId) {
             super("Session '" + sessionId + "' not found in sessionCallback '" + baseUrl + "'");
         }
+    }
+
+    private static class FrameQueue {
+
+        private final LinkedList<String> queue = new LinkedList<String>();
+
+        public synchronized void put(String frame) {
+            queue.add(frame);
+        }
+
+        public synchronized String[] getAndClear() {
+            String[] flushableMessages;
+            flushableMessages = queue.toArray(new String[queue.size()]);
+            if (flushableMessages.length > 0) {
+                queue.clear();
+            }
+            return flushableMessages;
+        }
+
     }
 
 }

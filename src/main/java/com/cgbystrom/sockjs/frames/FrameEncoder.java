@@ -20,30 +20,22 @@ import com.fasterxml.jackson.core.io.JsonStringEncoder;
  */
 public class FrameEncoder {
 
-    private static final ChannelBuffer OPEN_FRAME = ChannelBuffers.copiedBuffer("o", CharsetUtil.UTF_8);
-    private static final ChannelBuffer OPEN_FRAME_NL = ChannelBuffers.copiedBuffer("o\n", CharsetUtil.UTF_8);
-    private static final ChannelBuffer HEARTBEAT_FRAME = ChannelBuffers.copiedBuffer("h", CharsetUtil.UTF_8);
-    private static final ChannelBuffer HEARTBEAT_FRAME_NL = ChannelBuffers.copiedBuffer("h\n", CharsetUtil.UTF_8);
-    private static final ChannelBuffer PRELUDE_FRAME = generatePreludeFrame('h', 2048, false);
-    private static final ChannelBuffer PRELUDE_FRAME_NL = generatePreludeFrame('h', 2048, true);
-    private static final ChannelBuffer NEW_LINE = ChannelBuffers.copiedBuffer("\n", CharsetUtil.UTF_8);
-
     public static ChannelBuffer encode(Frame frame, boolean appendNewline) {
         if (frame instanceof OpenFrame) {
-            return appendNewline ? OPEN_FRAME_NL : OPEN_FRAME;
+            return appendNewline ? ChannelBuffers.copiedBuffer("o\n", CharsetUtil.UTF_8) : ChannelBuffers.copiedBuffer("o", CharsetUtil.UTF_8);
         } else if (frame instanceof HeartbeatFrame) {
-            return appendNewline ? HEARTBEAT_FRAME_NL : HEARTBEAT_FRAME;
+            return appendNewline ? ChannelBuffers.copiedBuffer("h\n", CharsetUtil.UTF_8) : ChannelBuffers.copiedBuffer("h", CharsetUtil.UTF_8);
         } else if (frame instanceof PreludeFrame) {
-            return appendNewline ? PRELUDE_FRAME_NL : PRELUDE_FRAME;
+            return appendNewline ? generatePreludeFrame('h', 2048, true) : generatePreludeFrame('h', 2048, false);
         } else if (frame instanceof MessageFrame) {
             ChannelBuffer encodedMessageFrame;
             encodedMessageFrame = encoderMessageFrame((MessageFrame)frame);
-            return appendNewline ? ChannelBuffers.wrappedBuffer(encodedMessageFrame, NEW_LINE) : encodedMessageFrame;
+            return appendNewline ? ChannelBuffers.wrappedBuffer(encodedMessageFrame, ChannelBuffers.copiedBuffer("\n", CharsetUtil.UTF_8)) : encodedMessageFrame;
         }  else if (frame instanceof CloseFrame) {
             ChannelBuffer encodedCloseFrame;
             encodedCloseFrame = encoderCloseFrame((CloseFrame)frame);
-            return appendNewline ? ChannelBuffers.wrappedBuffer(encodedCloseFrame, NEW_LINE) : encodedCloseFrame;
-        }else {
+            return appendNewline ? ChannelBuffers.wrappedBuffer(encodedCloseFrame, ChannelBuffers.copiedBuffer("\n", CharsetUtil.UTF_8)) : encodedCloseFrame;
+        } else {
             throw new IllegalArgumentException("Unknown frame type passed: " + frame.getClass().getSimpleName());
         }
     }

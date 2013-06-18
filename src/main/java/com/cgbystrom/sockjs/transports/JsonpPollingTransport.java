@@ -6,7 +6,7 @@ import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
 import org.jboss.netty.channel.ChannelFutureListener;
 import org.jboss.netty.channel.ChannelHandlerContext;
-import org.jboss.netty.channel.DownstreamMessageEvent;
+import org.jboss.netty.channel.Channels;
 import org.jboss.netty.channel.MessageEvent;
 import org.jboss.netty.handler.codec.http.HttpHeaders;
 import org.jboss.netty.handler.codec.http.HttpRequest;
@@ -28,43 +28,49 @@ public class JsonpPollingTransport extends BaseTransport {
     private String                      jsonpCallback;
 
     @Override
-    public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) throws Exception {
-        HttpRequest request = (HttpRequest) e.getMessage();
+    public void messageReceived(ChannelHandlerContext context, MessageEvent event) throws Exception {
+        HttpRequest request = (HttpRequest) event.getMessage();
 
-        QueryStringDecoder qsd = new QueryStringDecoder(request.getUri());
-        final List<String> c = qsd.getParameters().get("c");
-        if (c == null) {
-            respondAndClose(e.getChannel(), HttpResponseStatus.INTERNAL_SERVER_ERROR, "\"callback\" parameter required.");
+        QueryStringDecoder queryStringDecoder = new QueryStringDecoder(request.getUri());
+        final List<String> c = queryStringDecoder.getParameters().get("c");
+        if (c == null || c.isEmpty()) {
+            respondAndClose(event.getChannel(), HttpResponseStatus.INTERNAL_SERVER_ERROR, "\"callback\" parameter required.");
             return;
         }
 
         jsonpCallback = c.get(0);
 
-        super.messageReceived(ctx, e);
+        super.messageReceived(context, event);
     }
 
     @Override
-    public void writeRequested(ChannelHandlerContext ctx, MessageEvent e) throws Exception {
-        if (e.getMessage() instanceof Frame) {
-            final Frame frame = (Frame) e.getMessage();
+    public void writeRequested(ChannelHandlerContext context, MessageEvent event) throws Exception {
+        if (event.getMessage() instanceof Frame[]) {
+            Frame[] frames = (Frame[]) event.getMessage();
+
             HttpResponse response = createResponse(CONTENT_TYPE_JAVASCRIPT);
             response.setHeader(HttpHeaders.Names.CONNECTION, HttpHeaders.Values.CLOSE);
             response.setHeader(HttpHeaders.Names.CACHE_CONTROL, "no-store, no-cache, must-revalidate, max-age=0");
 
-            ChannelBuffer escapedContent = ChannelBuffers.dynamicBuffer();
-            ChannelBuffer rawContent = FrameEncoder.encode(frame, false);
-            FrameEncoder.escapeJson(rawContent, escapedContent);
-            String message = jsonpCallback + "(\"" + escapedContent.toString(CharsetUtil.UTF_8) + "\");\r\n";
+            ChannelBuffer content = ChannelBuffers.dynamicBuffer();
+            content.writeBytes(new String(jsonpCallback + "(\"").getBytes(CharsetUtil.UTF_8));
+            for(Frame frame : frames) {
+                ChannelBuffer escapedContent = ChannelBuffers.dynamicBuffer();
+                ChannelBuffer rawContent = FrameEncoder.encode(frame, false);
+                FrameEncoder.escapeJson(rawContent, escapedContent);
+                content.writeBytes(escapedContent.toString(CharsetUtil.UTF_8).getBytes(CharsetUtil.UTF_8));
+            }
+            content.writeBytes(new String("\");\r\n").getBytes(CharsetUtil.UTF_8));
 
-            e.getFuture().addListener(ChannelFutureListener.CLOSE);
-
-            final ChannelBuffer content = ChannelBuffers.copiedBuffer(message, CharsetUtil.UTF_8);
             response.setContent(content);
             response.setHeader(HttpHeaders.Names.CONTENT_LENGTH, content.readableBytes());
 
-            ctx.sendDownstream(new DownstreamMessageEvent(e.getChannel(), e.getFuture(), response, e.getRemoteAddress()));
+            event.getFuture().addListener(ChannelFutureListener.CLOSE);
+
+            Channels.write(context, event.getFuture(), response);
+
         } else {
-            super.writeRequested(ctx, e);
+            super.writeRequested(context, event);
         }
     }
 }
