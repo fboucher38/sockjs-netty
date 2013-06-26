@@ -1,8 +1,5 @@
 package com.cgbystrom.sockjs.transports;
 
-import static org.jboss.netty.handler.codec.http.HttpHeaders.isKeepAlive;
-import static org.jboss.netty.handler.codec.http.HttpHeaders.Names.ALLOW;
-import static org.jboss.netty.handler.codec.http.HttpHeaders.Names.CONNECTION;
 import static org.jboss.netty.handler.codec.http.HttpMethod.GET;
 import static org.jboss.netty.handler.codec.http.HttpResponseStatus.METHOD_NOT_ALLOWED;
 import static org.jboss.netty.handler.codec.http.HttpVersion.HTTP_1_1;
@@ -11,18 +8,13 @@ import org.jboss.netty.channel.Channel;
 import org.jboss.netty.channel.ChannelFuture;
 import org.jboss.netty.channel.ChannelFutureListener;
 import org.jboss.netty.channel.ChannelHandlerContext;
-import org.jboss.netty.channel.ChannelPipeline;
-import org.jboss.netty.channel.ChannelState;
-import org.jboss.netty.channel.ChannelStateEvent;
+import org.jboss.netty.channel.Channels;
 import org.jboss.netty.channel.ExceptionEvent;
 import org.jboss.netty.channel.MessageEvent;
-import org.jboss.netty.channel.SimpleChannelHandler;
-import org.jboss.netty.channel.UpstreamChannelStateEvent;
 import org.jboss.netty.handler.codec.http.DefaultHttpResponse;
 import org.jboss.netty.handler.codec.http.HttpHeaders;
 import org.jboss.netty.handler.codec.http.HttpHeaders.Values;
 import org.jboss.netty.handler.codec.http.HttpRequest;
-import org.jboss.netty.handler.codec.http.HttpResponse;
 import org.jboss.netty.handler.codec.http.HttpResponseStatus;
 import org.jboss.netty.handler.codec.http.websocketx.CloseWebSocketFrame;
 import org.jboss.netty.handler.codec.http.websocketx.PingWebSocketFrame;
@@ -33,58 +25,38 @@ import org.jboss.netty.handler.codec.http.websocketx.WebSocketHandshakeException
 import org.jboss.netty.handler.codec.http.websocketx.WebSocketServerHandshaker;
 import org.jboss.netty.handler.codec.http.websocketx.WebSocketServerHandshakerFactory;
 import org.jboss.netty.handler.ssl.SslHandler;
-import org.jboss.netty.logging.InternalLogger;
-import org.jboss.netty.logging.InternalLoggerFactory;
 
-import com.cgbystrom.sockjs.PreflightHandler;
-import com.cgbystrom.sockjs.ServiceRouter;
-import com.cgbystrom.sockjs.SessionHandler;
+import com.cgbystrom.sockjs.Service;
 import com.cgbystrom.sockjs.frames.Frame;
+import com.cgbystrom.sockjs.handlers.HttpRequestHandler;
+import com.cgbystrom.sockjs.handlers.PreflightHandler;
+import com.cgbystrom.sockjs.handlers.ServiceRouterHandler;
+import com.cgbystrom.sockjs.handlers.TransportRouterHandler;
 
-public abstract class BaseWebSocketTransport extends SimpleChannelHandler {
+public abstract class AbstractWebSocketTransport extends AbstractTransport {
 
-    @SuppressWarnings("unused")
-    private static final InternalLogger LOGGER = InternalLoggerFactory.getInstance(BaseWebSocketTransport.class);
-
-    private WebSocketServerHandshaker   handshaker;
-    private final String                path;
-
-    public BaseWebSocketTransport(String path) {
-        this.path = path;
-    }
+    private WebSocketServerHandshaker handshaker;
 
     protected abstract void handleReceivedTextWebSocketFrame(ChannelHandlerContext context, MessageEvent event, TextWebSocketFrame textWebSocketFrame) throws Exception;
 
     protected abstract void handleWroteSockJsFrame(ChannelHandlerContext context, MessageEvent event, Frame frame) throws Exception;
 
     @Override
-    public final void channelOpen(ChannelHandlerContext context, ChannelStateEvent event) throws Exception {
-        // Overridden method to prevent propagation of channel state event upstream.
-    }
-
-    @Override
-    public final void channelConnected(ChannelHandlerContext context, ChannelStateEvent event) throws Exception {
-        // Overridden method to prevent propagation of channel state event upstream.
-    }
-
-    @Override
     public void messageReceived(ChannelHandlerContext context, MessageEvent event) throws Exception {
-        Object msg = event.getMessage();
-        if (msg instanceof HttpRequest) {
-            handleHttpRequest(context, event, (HttpRequest) msg);
-        } else if (msg instanceof WebSocketFrame) {
-            handleWebSocketFrame(context, event, (WebSocketFrame) msg);
+        Object message = event.getMessage();
+        if (message instanceof HttpRequest) {
+            handleHttpRequest(context, event, (HttpRequest) message);
+        } else if (message instanceof WebSocketFrame) {
+            handleWebSocketFrame(context, event, (WebSocketFrame) message);
         } else {
-            throw new IllegalArgumentException("Unknown frame type: " + event.getMessage());
+            throw new IllegalArgumentException("Unknown frame type: " + message);
         }
     }
 
     @Override
     public void writeRequested(ChannelHandlerContext context, MessageEvent event) throws Exception {
-        if (event.getMessage() instanceof Frame[]) {
-            for(Frame frame : (Frame[]) event.getMessage()) {
-                handleWroteSockJsFrame(context, event, frame);
-            }
+        if (event.getMessage() instanceof Frame) {
+            handleWroteSockJsFrame(context, event, (Frame)event.getMessage());
         } else {
             super.writeRequested(context, event);
         }
@@ -92,12 +64,9 @@ public abstract class BaseWebSocketTransport extends SimpleChannelHandler {
 
     @Override
     public void exceptionCaught(ChannelHandlerContext context, ExceptionEvent event) throws Exception {
-        // FIXME: Move to BaseTransport
-        if (event.getCause() instanceof SessionHandler.NotFoundException) {
-            BaseTransport.respondAndClose(event.getChannel(), HttpResponseStatus.NOT_FOUND, "Session not found.");
-        } else if (event.getCause() instanceof WebSocketHandshakeException) {
+        if (event.getCause() instanceof WebSocketHandshakeException) {
             if (event.getCause().getMessage().contains("missing upgrade")) {
-                BaseTransport.respondAndClose(event.getChannel(), HttpResponseStatus.BAD_REQUEST,
+                respondAndClose(event.getChannel(), HttpResponseStatus.BAD_REQUEST,
                         "Can \"Upgrade\" only to \"WebSocket\".");
             }
         } else {
@@ -112,8 +81,9 @@ public abstract class BaseWebSocketTransport extends SimpleChannelHandler {
         // Allow only GET methods.
         if (req.getMethod() != GET) {
             DefaultHttpResponse response = new DefaultHttpResponse(HTTP_1_1, METHOD_NOT_ALLOWED);
-            response.addHeader(ALLOW, GET.toString());
-            sendHttpResponse(context, req, response);
+            response.addHeader(HttpHeaders.Names.ALLOW, GET.toString());
+            response.setHeader(HttpHeaders.Names.CONNECTION, Values.CLOSE);
+            context.getChannel().write(response).addListener(ChannelFutureListener.CLOSE);
             return;
         }
 
@@ -131,7 +101,7 @@ public abstract class BaseWebSocketTransport extends SimpleChannelHandler {
         }
 
         // Handshake
-        String wsLocation = getWebSocketLocation(channel.getPipeline(), req);
+        String wsLocation = getWebSocketLocation(channel);
         WebSocketServerHandshakerFactory wsFactory = new WebSocketServerHandshakerFactory(wsLocation, null, false);
 
         handshaker = wsFactory.newHandshaker(req);
@@ -142,9 +112,11 @@ public abstract class BaseWebSocketTransport extends SimpleChannelHandler {
                 @Override
                 public void operationComplete(ChannelFuture future) throws Exception {
                     if (future.isSuccess()) {
-                        context.getPipeline().remove(ServiceRouter.class);
+                        context.getPipeline().remove(HttpRequestHandler.class);
+                        context.getPipeline().remove(ServiceRouterHandler.class);
+                        context.getPipeline().remove(TransportRouterHandler.class);
                         context.getPipeline().remove(PreflightHandler.class);
-                        context.sendUpstream(new UpstreamChannelStateEvent(channel, ChannelState.CONNECTED, Boolean.TRUE));
+                        Channels.fireChannelOpen(context);
                     }
                 }
             });
@@ -169,23 +141,14 @@ public abstract class BaseWebSocketTransport extends SimpleChannelHandler {
         handleReceivedTextWebSocketFrame(context, event, textWebSocketFrame);
     }
 
-    private void sendHttpResponse(ChannelHandlerContext context, HttpRequest req, HttpResponse res) {
-        // Send the response and close the connection if necessary.
-        if (!isKeepAlive(req) || res.getStatus().getCode() != 200) {
-            res.setHeader(CONNECTION, Values.CLOSE);
-            context.getChannel().write(res).addListener(ChannelFutureListener.CLOSE);
-        } else {
-            context.getChannel().write(res);
-        }
-    }
-
-    private String getWebSocketLocation(ChannelPipeline pipeline, HttpRequest req) {
-        // FIXME: Handle non-standard HTTP port?
-        boolean isSsl = pipeline.get(SslHandler.class) != null;
+    private String getWebSocketLocation(Channel channel) {
+        boolean isSsl = channel.getPipeline().get(SslHandler.class) != null;
+        HttpRequest request = HttpRequestHandler.getRequestForChannel(channel);
+        Service service = ServiceRouterHandler.getServiceForChannel(channel);
         if (isSsl) {
-            return "wss://" + req.getHeader(HttpHeaders.Names.HOST) + path;
+            return "wss://" + request.getHeader(HttpHeaders.Names.HOST) + service.getUrl();
         } else {
-            return "ws://" + req.getHeader(HttpHeaders.Names.HOST) + path;
+            return "ws://" + request.getHeader(HttpHeaders.Names.HOST) + service.getUrl();
         }
     }
 }

@@ -1,4 +1,4 @@
-package com.cgbystrom.sockjs;
+package com.cgbystrom.sockjs.pages;
 
 import java.io.UnsupportedEncodingException;
 import java.security.MessageDigest;
@@ -7,6 +7,10 @@ import java.util.Formatter;
 
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
+import org.jboss.netty.channel.ChannelHandlerContext;
+import org.jboss.netty.channel.MessageEvent;
+import org.jboss.netty.channel.SimpleChannelHandler;
+import org.jboss.netty.handler.codec.http.DefaultHttpResponse;
 import org.jboss.netty.handler.codec.http.HttpHeaders;
 import org.jboss.netty.handler.codec.http.HttpRequest;
 import org.jboss.netty.handler.codec.http.HttpResponse;
@@ -14,7 +18,7 @@ import org.jboss.netty.handler.codec.http.HttpResponseStatus;
 import org.jboss.netty.handler.codec.http.QueryStringDecoder;
 import org.jboss.netty.util.CharsetUtil;
 
-public class IframePage {
+public class IframePage extends SimpleChannelHandler {
     private final ChannelBuffer content;
     private String              etag;
 
@@ -22,9 +26,15 @@ public class IframePage {
         content = createContent(url);
     }
 
-    public void handle(HttpRequest request, HttpResponse response) {
-        QueryStringDecoder qsd = new QueryStringDecoder(request.getUri());
-        String path = qsd.getPath();
+    @Override
+    public void messageReceived(ChannelHandlerContext context, MessageEvent event) throws Exception {
+        HttpRequest request = (HttpRequest) event.getMessage();
+
+        QueryStringDecoder requestQueryDecoder = new QueryStringDecoder(request.getUri());
+        String path = requestQueryDecoder.getPath();
+
+        HttpResponse response;
+        response = new DefaultHttpResponse(request.getProtocolVersion(), HttpResponseStatus.OK);
 
         if (!path.matches(".*/iframe[0-9-.a-z_]*.html")) {
             response.setStatus(HttpResponseStatus.NOT_FOUND);
@@ -41,22 +51,25 @@ public class IframePage {
             response.setHeader(HttpHeaders.Names.CONTENT_TYPE, "text/html; charset=UTF-8");
             response.setHeader(HttpHeaders.Names.CACHE_CONTROL, "max-age=31536000, public");
             response.setHeader(HttpHeaders.Names.EXPIRES, "FIXME"); // FIXME:
-                                                                    // Fix this
+            // Fix this
             response.removeHeader(HttpHeaders.Names.SET_COOKIE);
             response.setContent(content);
         }
 
         response.setHeader(HttpHeaders.Names.ETAG, etag);
+
+        context.getChannel().write(response);
+
     }
 
     private ChannelBuffer createContent(String url) {
         String content = "<!DOCTYPE html>\n" + "<html>\n" + "<head>\n"
-            + "  <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\" />\n"
-            + "  <meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n" + "  <script>\n"
-            + "    document.domain = document.domain;\n"
-            + "    _sockjs_onload = function(){SockJS.bootstrap_iframe();};\n" + "  </script>\n" + "  <script src=\""
-            + url + "\"></script>\n" + "</head>\n" + "<body>\n" + "  <h2>Don't panic!</h2>\n"
-            + "  <p>This is a SockJS hidden iframe. It's used for cross domain magic.</p>\n" + "</body>\n" + "</html>";
+                + "  <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\" />\n"
+                + "  <meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n" + "  <script>\n"
+                + "    document.domain = document.domain;\n"
+                + "    _sockjs_onload = function(){SockJS.bootstrap_iframe();};\n" + "  </script>\n" + "  <script src=\""
+                + url + "\"></script>\n" + "</head>\n" + "<body>\n" + "  <h2>Don't panic!</h2>\n"
+                + "  <p>This is a SockJS hidden iframe. It's used for cross domain magic.</p>\n" + "</body>\n" + "</html>";
 
         // FIXME: Don't modify attributes here
         etag = "\"" + generateMd5(content) + "\"";

@@ -1,4 +1,4 @@
-package com.cgbystrom.sockjs;
+package com.cgbystrom.sockjs.handlers;
 
 import org.jboss.netty.channel.*;
 import org.jboss.netty.handler.codec.http.*;

@@ -5,20 +5,20 @@ public interface SessionCallback {
     /**
      * @param session
      */
-    public void onOpen(Session session) throws Exception;
+    public void onOpen(Session session);
 
     /**
      * 
      * @param session
      */
-    public void onClose(Session session) throws Exception;
+    public void onClose(Session session);
 
     /**
      * 
      * @param session
      * @param message
      */
-    public void onMessage(Session session, String message) throws Exception;
+    public void onMessage(Session session, String message);
 
     /**
      * If return false, then silence the exception

@@ -3,27 +3,32 @@ package com.cgbystrom.sockjs.transports;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
+import org.jboss.netty.channel.Channel;
 import org.jboss.netty.channel.ChannelFutureListener;
 import org.jboss.netty.channel.ChannelHandlerContext;
 import org.jboss.netty.channel.ChannelStateEvent;
 import org.jboss.netty.channel.WriteCompletionEvent;
 import org.jboss.netty.handler.codec.http.HttpChunk;
 import org.jboss.netty.handler.codec.http.HttpHeaders;
+import org.jboss.netty.handler.codec.http.HttpRequest;
 import org.jboss.netty.handler.codec.http.HttpResponse;
 import org.jboss.netty.handler.codec.http.HttpVersion;
+
+import com.cgbystrom.sockjs.handlers.HttpRequestHandler;
 
 /**
  * Base class for streaming transports
  *
  * Handles HTTP chunking and response size limiting for browser "garbage collection".
  */
-public abstract class StreamingTransport extends BaseTransport {
+public abstract class AbstractStreamingTransport extends AbstractTransport {
+
     /**
      *  Max size of response content sent before closing the connection.
      *  Since browsers buffer chunked/streamed content in-memory the connection must be closed
      *  at regular intervals. Call it "garbage collection" if you will.
      */
-    protected final long maxResponseSize;
+    protected final long responseLimit;
 
     /** Track size of content chunks sent to the browser. */
     protected AtomicLong numBytesSent = new AtomicLong(0);
@@ -34,39 +39,42 @@ public abstract class StreamingTransport extends BaseTransport {
     /** Keep track if ending HTTP chunk has been sent */
     private final AtomicBoolean lastChunkSent = new AtomicBoolean(false);
 
-    public StreamingTransport() {
-        this.maxResponseSize = 128 * 1024; // 128 KiB
+    public AbstractStreamingTransport() {
+        this(128 * 1024); // 128 KiB
     }
 
-    public StreamingTransport(int maxResponseSize) {
-        this.maxResponseSize = maxResponseSize;
+    public AbstractStreamingTransport(int responseLimit) {
+        this.responseLimit = responseLimit;
     }
 
     @Override
-    public void closeRequested(ChannelHandlerContext ctx, ChannelStateEvent e) throws Exception {
+    public void closeRequested(ChannelHandlerContext context, ChannelStateEvent event) throws Exception {
+        HttpRequest request;
+        request = HttpRequestHandler.getRequestForChannel(context.getChannel());
+
         // request can be null since close can be requested prior to receiving a message.
         if (request != null && request.getProtocolVersion() == HttpVersion.HTTP_1_1 && lastChunkSent.compareAndSet(false, true)) {
-            e.getChannel().write(HttpChunk.LAST_CHUNK).addListener(ChannelFutureListener.CLOSE);
+            event.getChannel().write(HttpChunk.LAST_CHUNK).addListener(ChannelFutureListener.CLOSE);
         } else {
-            super.closeRequested(ctx, e);
+            super.closeRequested(context, event);
         }
     }
 
     @Override
     public void writeComplete(ChannelHandlerContext context, WriteCompletionEvent event) throws Exception {
-        if (numBytesSent.addAndGet(event.getWrittenAmount()) >= maxResponseSize) {
+        if (numBytesSent.addAndGet(event.getWrittenAmount()) >= responseLimit) {
             // Close the connection to allow the browser to flush in-memory buffered content from this XHR stream.
             event.getFuture().addListener(ChannelFutureListener.CLOSE);
         }
-        super.writeComplete(context, event);
     }
 
     @Override
-    protected HttpResponse createResponse(String contentType) {
-        HttpResponse response = super.createResponse(contentType);
-        if (request.getProtocolVersion().equals(HttpVersion.HTTP_1_1)) {
+    protected HttpResponse createResponse(Channel channel, String contentType) {
+        HttpResponse response = super.createResponse(channel, contentType);
+        if (response.getProtocolVersion().equals(HttpVersion.HTTP_1_1)) {
             response.setHeader(HttpHeaders.Names.TRANSFER_ENCODING, HttpHeaders.Values.CHUNKED);
         }
         return response;
     }
+
 }
