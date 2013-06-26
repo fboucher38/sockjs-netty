@@ -110,7 +110,7 @@ public final class ServiceBuilder {
         }
 
         @Override
-        public int getMaxResponseSize() {
+        public int getResponseSizeLimit() {
             return maxResponseSize;
         }
 
@@ -120,7 +120,7 @@ public final class ServiceBuilder {
         }
 
         @Override
-        public SessionHandler getOrCreateSession(String sessionId) throws Exception {
+        public SessionHandler getOrCreateSession(String sessionId) {
             SessionHandler session;
 
             session = sessions.get(sessionId);
@@ -138,12 +138,12 @@ public final class ServiceBuilder {
         }
 
         @Override
-        public SessionHandler getSession(String sessionId) throws Exception {
+        public SessionHandler getSession(String sessionId) throws SessionNotFound {
             SessionHandler session;
 
             session = sessions.get(sessionId);
             if (session == null) {
-                throw new Exception(sessionId);
+                throw new SessionNotFound(sessionId, "not found");
             }
 
             return session;
@@ -155,7 +155,7 @@ public final class ServiceBuilder {
          * @throws Exception
          */
         @Override
-        public SessionHandler forceCreateSession(String sessionId) throws Exception {
+        public SessionHandler forceCreateSession(String sessionId) {
             SessionHandler newSession;
             newSession = newSession(sessionId);
 
@@ -183,7 +183,7 @@ public final class ServiceBuilder {
          * @return
          * @throws Exception
          */
-        private SessionHandler newSession(final String sessionId) throws Exception {
+        private SessionHandler newSession(final String sessionId) {
             Runnable disposer;
             disposer = new Runnable() {
                 @Override

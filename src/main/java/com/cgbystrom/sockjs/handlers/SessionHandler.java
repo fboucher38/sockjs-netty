@@ -1,12 +1,12 @@
 package com.cgbystrom.sockjs.handlers;
 
-import java.io.IOException;
 import java.net.SocketAddress;
 import java.nio.channels.ClosedChannelException;
 import java.util.LinkedList;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.jboss.netty.channel.Channel;
@@ -14,6 +14,7 @@ import org.jboss.netty.channel.ChannelFuture;
 import org.jboss.netty.channel.ChannelFutureListener;
 import org.jboss.netty.channel.ChannelHandlerContext;
 import org.jboss.netty.channel.ChannelStateEvent;
+import org.jboss.netty.channel.Channels;
 import org.jboss.netty.channel.ExceptionEvent;
 import org.jboss.netty.channel.MessageEvent;
 import org.jboss.netty.channel.SimpleChannelHandler;
@@ -45,6 +46,8 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
     private final ScheduledExecutorService scheduledExecutor;
     private final Integer                  timeoutDelay;
     private final Integer                  hreatbeatDelay;
+
+    private final AtomicBoolean            flushingQueue = new AtomicBoolean(false);
     private final LinkedList<String>       queue = new LinkedList<String>();
     private final AtomicReference<Channel> channel;
     private final AtomicReference<State>   state;
@@ -54,6 +57,42 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
     private SocketAddress                  remoteAddress;
     private Future<?>                      timeoutFuture;
     private Future<?>                      heartbeatFuture;
+
+    private final ChannelFutureListener flushListener = new ChannelFutureListener() {
+        @Override
+        public void operationComplete(ChannelFuture future) throws Exception {
+            Channel currentChannel;
+            currentChannel = future.getChannel();
+
+            if(future.isSuccess() && currentChannel.isOpen()) {
+                flush(currentChannel);
+            }
+        }
+    };
+
+    private final ChannelFutureListener closeListener = new ChannelFutureListener() {
+        @Override
+        public void operationComplete(ChannelFuture future) throws Exception {
+            Channel currentChannel;
+            currentChannel = future.getChannel();
+
+            if(future.isSuccess() && currentChannel.isOpen()) {
+                close(currentChannel);
+            }
+        }
+    };
+
+    private final ChannelFutureListener flushAndCloseListener = new ChannelFutureListener() {
+        @Override
+        public void operationComplete(ChannelFuture future) throws Exception {
+            Channel currentChannel;
+            currentChannel = future.getChannel();
+
+            if(future.isSuccess() && currentChannel.isOpen()) {
+                flush(currentChannel).addListener(closeListener);
+            }
+        }
+    };
 
     public SessionHandler(String id, SessionCallback sessionCallback,
                           ScheduledExecutorService scheduledExecutor, Integer timeoutDelay,
@@ -98,19 +137,19 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
         tryCancelTimeout();
 
         if (state.get() == State.CLOSING) {
-            flushAndClose(newChannel);
+            event.getFuture().addListener(flushAndCloseListener);
             return;
         }
 
-        scheduleHeartbeat();
+        scheduleHeartbeat(newChannel);
 
         if (state.compareAndSet(State.CONNECTING, State.OPEN)) {
-            newChannel.write(Frame.openFrame()).await();
+            newChannel.write(Frame.openFrame()).addListener(flushListener);
             sessionCallback.onOpen(this);
-        }
 
-        if(newChannel.isOpen()) {
-            flush(newChannel);
+        } else {
+            event.getFuture().addListener(flushListener);
+
         }
     }
 
@@ -130,22 +169,24 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
 
     @Override
     public void messageReceived(ChannelHandlerContext context, MessageEvent event) throws Exception {
-        if (state.get() == State.OPEN) {
-            if (LOGGER.isDebugEnabled()) {
-                LOGGER.debug("Session " + id + " received message: " + event.getMessage());
-            }
-
-            sessionCallback.onMessage(this, (String) event.getMessage());
-
+        if (state.get() != State.OPEN) {
+            throw new IllegalStateException("not opened");
         }
+
+        if (LOGGER.isDebugEnabled()) {
+            LOGGER.debug("Session " + id + " received message: " + event.getMessage());
+        }
+
+        sessionCallback.onMessage(this, (String) event.getMessage());
+
     }
 
     @Override
     public void exceptionCaught(ChannelHandlerContext aCtx, ExceptionEvent event) throws Exception {
-        if(event.getCause() instanceof ClosedChannelException || event.getCause() instanceof IOException) {
-            if(event.getChannel().isOpen()) {
+        if(event.getCause() instanceof ClosedChannelException) { //  || event.getCause() instanceof IOException
+            /*if(event.getChannel().isOpen()) {
                 event.getFuture().addListener(ChannelFutureListener.CLOSE);
-            }
+            }*/
             return;
         }
 
@@ -168,8 +209,13 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
 
     @Override
     public void send(String message) {
-        if (LOGGER.isDebugEnabled())
+        if (state.get() != State.OPEN) {
+            throw new IllegalStateException("not opened");
+        }
+
+        if (LOGGER.isDebugEnabled()) {
             LOGGER.debug("Session " + id + " sending message: " + message);
+        }
 
         synchronized (queue) {
             queue.add(message);
@@ -200,14 +246,24 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
             if (LOGGER.isDebugEnabled())
                 LOGGER.debug("Session " + id + " server initiated close, closing...");
 
-            Channel currentChannel;
+            final Channel currentChannel;
             currentChannel = channel.get();
 
             closeFrame = Frame.closeFrame(status, reason);
 
             try {
-                if(currentChannel != null && currentChannel.isOpen() && !flushAndClose(currentChannel))  {
-                    scheduleTimeout();
+                if(currentChannel != null && currentChannel.isOpen())  {
+                    ChannelFuture flushFuture;
+                    flushFuture = flush(currentChannel);
+                    flushFuture.addListener(closeListener);
+                    flushFuture.addListener(new ChannelFutureListener() {
+                        @Override
+                        public void operationComplete(ChannelFuture future) throws Exception {
+                            if(future.isSuccess()) {
+                                scheduleTimeout();
+                            }
+                        }
+                    });
                 }
 
             } catch (InterruptedException e) {
@@ -227,57 +283,88 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
         return remoteAddress;
     }
 
-    private boolean flush(Channel channel) throws InterruptedException {
-        boolean done;
+    private ChannelFuture flush(Channel channel) throws InterruptedException {
+        if(!channel.isOpen()) {
+            throw new IllegalStateException("not opened");
+        }
 
-        synchronized (queue) {
-            String[] flushableMessages;
-            flushableMessages = queue.toArray(new String[queue.size()]);
+        ChannelFuture flushFuture;
+
+        if(flushingQueue.compareAndSet(false, true)) {
+            final String[] flushableMessages;
+
+            synchronized (queue) {
+                flushableMessages = queue.toArray(new String[queue.size()]);
+            }
 
             if(flushableMessages.length > 0) {
-                ChannelFuture flushFuture;
                 flushFuture = channel.write(Frame.messageFrame(flushableMessages));
-                flushFuture.await();
+                flushFuture.addListener(new ChannelFutureListener() {
+                    @Override
+                    public void operationComplete(ChannelFuture future) throws Exception {
+                        if(future.isSuccess()) {
+                            Channel currentChannel;
+                            currentChannel = future.getChannel();
 
-                if(flushFuture.isSuccess()) {
-                    if(channel.isOpen()) {
-                        tryCancelHeartbeat();
-                        scheduleHeartbeat();
+                            synchronized (queue) {
+                                for(String message : flushableMessages) {
+                                    if(!queue.removeFirst().equals(message)) {
+                                        throw new IllegalStateException("unexpected message: this is a bug");
+                                    }
+                                }
+                            }
+
+                            if(currentChannel.isOpen()) {
+                                tryCancelHeartbeat();
+                                scheduleHeartbeat(currentChannel);
+                            }
+                        }
+
+                        flushingQueue.compareAndSet(true, false);
+
+                        Channel currentChannel;
+                        currentChannel = SessionHandler.this.channel.get();
+                        if(currentChannel != null && currentChannel.isOpen())  {
+                            flush(currentChannel);
+                        }
                     }
-                    done = true;
-                    queue.clear();
-
-                } else {
-                    done = false;
-                }
+                });
 
             } else {
-                done = true;
+                flushingQueue.compareAndSet(true, false);
+                flushFuture = Channels.succeededFuture(channel);
+
             }
+
+        } else {
+            flushFuture = Channels.succeededFuture(channel);
         }
 
-        return done;
+        return flushFuture;
     }
 
-    private boolean flushAndClose(Channel channel) throws InterruptedException {
+    private ChannelFuture close(Channel channel) throws InterruptedException {
+        if(!channel.isOpen()) {
+            throw new IllegalStateException("not opened");
+        }
         if(state.get() != State.CLOSING) {
-            throw new IllegalStateException();
+            throw new IllegalStateException("not closing");
         }
 
-        boolean closed = false;
+        ChannelFuture closeWriteFuture;
 
-        if(flush(channel) && channel.isOpen()) {
-            ChannelFuture closeWriteFuture;
-            closeWriteFuture = channel.write(closeFrame);
-            closeWriteFuture.addListener(ChannelFutureListener.CLOSE);
-
-            if(closeWriteFuture.await().isSuccess() && state.compareAndSet(State.CLOSING, State.CLOSED)) {
-                sessionCallback.onClose(SessionHandler.this);
-                closed = true;
+        closeWriteFuture = channel.write(closeFrame);
+        closeWriteFuture.addListener(ChannelFutureListener.CLOSE);
+        closeWriteFuture.addListener(new ChannelFutureListener() {
+            @Override
+            public void operationComplete(ChannelFuture future) throws Exception {
+                if(future.isSuccess() && state.compareAndSet(State.CLOSING, State.CLOSED)) {
+                    sessionCallback.onClose(SessionHandler.this);
+                }
             }
-        }
+        });
 
-        return closed;
+        return closeWriteFuture;
     }
 
     private void scheduleTimeout() {
@@ -289,17 +376,15 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
 
             @Override
             public void run() {
-                synchronized (SessionHandler.this) {
-                    if (state.compareAndSet(State.OPEN, State.CLOSED) || state.compareAndSet(State.CLOSING, State.CLOSED)) {
-                        disposer.run();
-                        try {
-                            sessionCallback.onClose(SessionHandler.this);
-                        } catch (Exception exception) {
-                            sessionCallback.onError(SessionHandler.this, exception);
-                        }
-                    } else {
-                        throw new IllegalStateException("already closed");
+                if (state.compareAndSet(State.OPEN, State.CLOSED) || state.compareAndSet(State.CLOSING, State.CLOSED)) {
+                    disposer.run();
+                    try {
+                        sessionCallback.onClose(SessionHandler.this);
+                    } catch (Exception exception) {
+                        sessionCallback.onError(SessionHandler.this, exception);
                     }
+                } else {
+                    throw new IllegalStateException("already closed");
                 }
             }
 
@@ -313,7 +398,7 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
         }
     }
 
-    private void scheduleHeartbeat() {
+    private void scheduleHeartbeat(final Channel channel) {
         if (heartbeatFuture != null) {
             throw new IllegalStateException("heartbeat is already scheduled");
         }
@@ -322,14 +407,11 @@ public final class SessionHandler extends SimpleChannelHandler implements Sessio
 
             @Override
             public void run() {
-                Channel currentChannel;
-                currentChannel = channel.get();
-
-                if (currentChannel == null) {
-                    throw new IllegalStateException("null channel");
+                if (!channel.isOpen()) {
+                    throw new IllegalStateException("channel not opened");
                 }
 
-                currentChannel.write(Frame.heartbeatFrame());
+                channel.write(Frame.heartbeatFrame());
 
             }
 

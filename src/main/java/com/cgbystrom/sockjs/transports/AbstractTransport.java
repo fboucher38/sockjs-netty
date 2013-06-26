@@ -75,6 +75,10 @@ public abstract class AbstractTransport extends SimpleChannelHandler {
         response.setContent(buffer);
         response.setHeader(HttpHeaders.Names.CONTENT_LENGTH, buffer.readableBytes());
 
+        if(response.getProtocolVersion() == HttpVersion.HTTP_1_1) {
+            response.setHeader(HttpHeaders.Names.CONNECTION, HttpHeaders.Values.CLOSE);
+        }
+
         channel.write(response).addListener(ChannelFutureListener.CLOSE);
 
     }
