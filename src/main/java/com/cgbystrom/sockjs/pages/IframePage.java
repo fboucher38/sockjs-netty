@@ -19,11 +19,33 @@ import org.jboss.netty.handler.codec.http.QueryStringDecoder;
 import org.jboss.netty.util.CharsetUtil;
 
 public class IframePage extends SimpleChannelHandler {
-    private final ChannelBuffer content;
-    private String              etag;
+
+    private final String content;
+    private final String etag;
 
     public IframePage(String url) {
-        content = createContent(url);
+        if(url == null || url.isEmpty()) {
+            throw new IllegalArgumentException("invalid url");
+        }
+
+        content = "<!DOCTYPE html>\n"
+                + "<html>\n"
+                + "<head>\n"
+                + "  <meta http-equiv=\"X-UA-Compatible\" contentBuffer=\"IE=edge\" />\n"
+                + "  <meta http-equiv=\"Content-Type\" contentBuffer=\"text/html; charset=UTF-8\" />\n"
+                + "  <script>\n"
+                + "    document.domain = document.domain;\n"
+                + "    _sockjs_onload = function(){SockJS.bootstrap_iframe();};\n"
+                + "  </script>\n"
+                + "  <script src=\"" + url + "\"></script>\n"
+                + "</head>\n"
+                + "<body>\n"
+                + "  <h2>Don't panic!</h2>\n"
+                + "  <p>This is a SockJS hidden iframe. It's used for cross domain magic.</p>\n"
+                + "</body>\n"
+                + "</html>";
+
+        etag = "\"" + generateMd5(content) + "\"";
     }
 
     @Override
@@ -33,16 +55,17 @@ public class IframePage extends SimpleChannelHandler {
         QueryStringDecoder requestQueryDecoder = new QueryStringDecoder(request.getUri());
         String path = requestQueryDecoder.getPath();
 
-        HttpResponse response;
-        response = new DefaultHttpResponse(request.getProtocolVersion(), HttpResponseStatus.OK);
-
         if (!path.matches(".*/iframe[0-9-.a-z_]*.html")) {
-            response.setStatus(HttpResponseStatus.NOT_FOUND);
-            response.setContent(ChannelBuffers.copiedBuffer("Not found", CharsetUtil.UTF_8));
-            return;
+            throw new IllegalStateException("invalid iframe uri");
         }
 
+        ChannelBuffer contentBuffer;
+        contentBuffer = ChannelBuffers.copiedBuffer(content, CharsetUtil.UTF_8);
+
+        HttpResponse response;
+        response = new DefaultHttpResponse(request.getProtocolVersion(), HttpResponseStatus.OK);
         response.setHeader(HttpHeaders.Names.SET_COOKIE, "JSESSIONID=dummy; path=/");
+        response.setHeader(HttpHeaders.Names.ETAG, etag);
 
         if (request.containsHeader(HttpHeaders.Names.IF_NONE_MATCH)) {
             response.setStatus(HttpResponseStatus.NOT_MODIFIED);
@@ -53,28 +76,12 @@ public class IframePage extends SimpleChannelHandler {
             response.setHeader(HttpHeaders.Names.EXPIRES, "FIXME"); // FIXME:
             // Fix this
             response.removeHeader(HttpHeaders.Names.SET_COOKIE);
-            response.setContent(content);
+            response.setHeader(HttpHeaders.Names.CONTENT_LENGTH, contentBuffer.readableBytes());
+            response.setContent(contentBuffer);
         }
-
-        response.setHeader(HttpHeaders.Names.ETAG, etag);
 
         context.getChannel().write(response);
 
-    }
-
-    private ChannelBuffer createContent(String url) {
-        String content = "<!DOCTYPE html>\n" + "<html>\n" + "<head>\n"
-                + "  <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\" />\n"
-                + "  <meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n" + "  <script>\n"
-                + "    document.domain = document.domain;\n"
-                + "    _sockjs_onload = function(){SockJS.bootstrap_iframe();};\n" + "  </script>\n" + "  <script src=\""
-                + url + "\"></script>\n" + "</head>\n" + "<body>\n" + "  <h2>Don't panic!</h2>\n"
-                + "  <p>This is a SockJS hidden iframe. It's used for cross domain magic.</p>\n" + "</body>\n" + "</html>";
-
-        // FIXME: Don't modify attributes here
-        etag = "\"" + generateMd5(content) + "\"";
-
-        return ChannelBuffers.copiedBuffer(content, CharsetUtil.UTF_8);
     }
 
     private static String generateMd5(String value) {

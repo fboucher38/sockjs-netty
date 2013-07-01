@@ -8,7 +8,6 @@ import org.jboss.netty.channel.Channel;
 import org.jboss.netty.channel.ChannelFuture;
 import org.jboss.netty.channel.ChannelFutureListener;
 import org.jboss.netty.channel.ChannelHandlerContext;
-import org.jboss.netty.channel.Channels;
 import org.jboss.netty.channel.ExceptionEvent;
 import org.jboss.netty.channel.MessageEvent;
 import org.jboss.netty.handler.codec.http.DefaultHttpResponse;
@@ -27,19 +26,22 @@ import org.jboss.netty.handler.codec.http.websocketx.WebSocketServerHandshakerFa
 import org.jboss.netty.handler.ssl.SslHandler;
 
 import com.cgbystrom.sockjs.Service;
-import com.cgbystrom.sockjs.frames.Frame;
-import com.cgbystrom.sockjs.handlers.HttpRequestHandler;
 import com.cgbystrom.sockjs.handlers.PreflightHandler;
 import com.cgbystrom.sockjs.handlers.ServiceRouterHandler;
+import com.cgbystrom.sockjs.handlers.SessionHandler;
 import com.cgbystrom.sockjs.handlers.TransportRouterHandler;
 
-public abstract class AbstractWebSocketTransport extends AbstractTransport {
+public abstract class AbstractWebSocketTransport extends AbstractReceiverTransport {
 
     private WebSocketServerHandshaker handshaker;
 
-    protected abstract void handleReceivedTextWebSocketFrame(ChannelHandlerContext context, MessageEvent event, TextWebSocketFrame textWebSocketFrame) throws Exception;
+    protected abstract void webSocketReady(Channel channel);
 
-    protected abstract void handleWroteSockJsFrame(ChannelHandlerContext context, MessageEvent event, Frame frame) throws Exception;
+    protected abstract void textWebSocketFrameReceived(ChannelHandlerContext context, MessageEvent event, TextWebSocketFrame textWebSocketFrame) throws Exception;
+
+    public AbstractWebSocketTransport(SessionHandler sessionHandler) {
+        super(sessionHandler);
+    }
 
     @Override
     public void messageReceived(ChannelHandlerContext context, MessageEvent event) throws Exception {
@@ -50,15 +52,6 @@ public abstract class AbstractWebSocketTransport extends AbstractTransport {
             handleWebSocketFrame(context, event, (WebSocketFrame) message);
         } else {
             throw new IllegalArgumentException("Unknown frame type: " + message);
-        }
-    }
-
-    @Override
-    public void writeRequested(ChannelHandlerContext context, MessageEvent event) throws Exception {
-        if (event.getMessage() instanceof Frame) {
-            handleWroteSockJsFrame(context, event, (Frame)event.getMessage());
-        } else {
-            super.writeRequested(context, event);
         }
     }
 
@@ -74,9 +67,8 @@ public abstract class AbstractWebSocketTransport extends AbstractTransport {
         }
     }
 
-    private void handleHttpRequest(final ChannelHandlerContext context, MessageEvent event, HttpRequest req)
-            throws Exception {
-        final Channel channel = event.getChannel();
+    private void handleHttpRequest(final ChannelHandlerContext context, MessageEvent event, HttpRequest req) throws Exception {
+        Channel channel = event.getChannel();
 
         // Allow only GET methods.
         if (req.getMethod() != GET) {
@@ -112,11 +104,11 @@ public abstract class AbstractWebSocketTransport extends AbstractTransport {
                 @Override
                 public void operationComplete(ChannelFuture future) throws Exception {
                     if (future.isSuccess()) {
-                        context.getPipeline().remove(HttpRequestHandler.class);
                         context.getPipeline().remove(ServiceRouterHandler.class);
                         context.getPipeline().remove(TransportRouterHandler.class);
                         context.getPipeline().remove(PreflightHandler.class);
-                        Channels.fireChannelOpen(context);
+
+                        webSocketReady(future.getChannel());
                     }
                 }
             });
@@ -138,12 +130,12 @@ public abstract class AbstractWebSocketTransport extends AbstractTransport {
 
         TextWebSocketFrame textWebSocketFrame;
         textWebSocketFrame = (TextWebSocketFrame) frame;
-        handleReceivedTextWebSocketFrame(context, event, textWebSocketFrame);
+        textWebSocketFrameReceived(context, event, textWebSocketFrame);
     }
 
     private String getWebSocketLocation(Channel channel) {
         boolean isSsl = channel.getPipeline().get(SslHandler.class) != null;
-        HttpRequest request = HttpRequestHandler.getRequestForChannel(channel);
+        HttpRequest request = ServiceRouterHandler.getRequestForChannel(channel);
         Service service = ServiceRouterHandler.getServiceForChannel(channel);
         if (isSsl) {
             return "wss://" + request.getHeader(HttpHeaders.Names.HOST) + service.getUrl();

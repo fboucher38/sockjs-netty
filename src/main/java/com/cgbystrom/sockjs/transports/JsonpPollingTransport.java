@@ -7,28 +7,26 @@ import java.util.List;
 
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
-import org.jboss.netty.channel.ChannelFutureListener;
+import org.jboss.netty.channel.Channel;
 import org.jboss.netty.channel.ChannelHandlerContext;
-import org.jboss.netty.channel.Channels;
 import org.jboss.netty.channel.MessageEvent;
-import org.jboss.netty.handler.codec.http.DefaultHttpResponse;
-import org.jboss.netty.handler.codec.http.HttpHeaders;
 import org.jboss.netty.handler.codec.http.HttpRequest;
 import org.jboss.netty.handler.codec.http.HttpResponse;
 import org.jboss.netty.handler.codec.http.HttpResponseStatus;
-import org.jboss.netty.handler.codec.http.HttpVersion;
 import org.jboss.netty.handler.codec.http.QueryStringDecoder;
 import org.jboss.netty.util.CharsetUtil;
 
-import com.cgbystrom.sockjs.frames.Frame;
-import com.cgbystrom.sockjs.frames.FrameEncoder;
+import com.cgbystrom.sockjs.handlers.SessionHandler;
+import com.fasterxml.jackson.core.io.JsonStringEncoder;
 
-/**
- *
- */
 public class JsonpPollingTransport extends AbstractPollingTransport {
 
-    private String jsonpCallback;
+    private final static byte[] PRE_CALLBACK = "(\"".getBytes(CharsetUtil.UTF_8);
+    private final static byte[] POST_CALLBACK = "\");\r\n".getBytes(CharsetUtil.UTF_8);
+
+    public JsonpPollingTransport(SessionHandler sessionHandler) {
+        super(sessionHandler);
+    }
 
     @Override
     public void messageReceived(ChannelHandlerContext context, MessageEvent event) throws Exception {
@@ -41,35 +39,35 @@ public class JsonpPollingTransport extends AbstractPollingTransport {
             return;
         }
 
+        String jsonpCallback;
         jsonpCallback = c.get(0);
 
-        Channels.fireChannelOpen(context);
+        HttpResponse response;
+        response = createResponse(context.getChannel(), CONTENT_TYPE_JAVASCRIPT);
 
+        registerReceiver(new JsonpResponseReceiver(context.getChannel(), response, jsonpCallback));
     }
 
-    @Override
-    public void writeRequested(ChannelHandlerContext context, MessageEvent event) throws Exception {
-        Frame frame = (Frame) event.getMessage();
+    private class JsonpResponseReceiver extends SingleResponseReceiver {
 
-        ChannelBuffer escapedContent = ChannelBuffers.dynamicBuffer();
-        ChannelBuffer rawContent = FrameEncoder.encode(frame, false);
-        FrameEncoder.escapeJson(rawContent, escapedContent);
-        ChannelBuffer content = ChannelBuffers.wrappedBuffer(
-                ChannelBuffers.copiedBuffer(jsonpCallback, CharsetUtil.UTF_8),
-                ChannelBuffers.copiedBuffer("(\"", CharsetUtil.UTF_8),
-                escapedContent,
-                ChannelBuffers.copiedBuffer("\");\r\n", CharsetUtil.UTF_8));
+        private final String jsonpCallback;
 
-        HttpResponse response;
-        response = new DefaultHttpResponse(HttpVersion.HTTP_1_0, HttpResponseStatus.OK);
-        response.setHeader(HttpHeaders.Names.CONTENT_TYPE, CONTENT_TYPE_JAVASCRIPT);
-        response.setHeader(HttpHeaders.Names.CONNECTION, HttpHeaders.Values.CLOSE);
-        response.setContent(content);
-        response.setHeader(HttpHeaders.Names.CONTENT_LENGTH, content.readableBytes());
+        public JsonpResponseReceiver(Channel channel, HttpResponse httpResponse, String jsonpCallback) {
+            super(channel, httpResponse);
+            if(jsonpCallback == null) {
+                throw new NullPointerException("jsonpCallback");
+            }
+            this.jsonpCallback = jsonpCallback;
+        }
 
-        event.getFuture().addListener(ChannelFutureListener.CLOSE);
-
-        Channels.write(context, event.getFuture(), response);
+        @Override
+        protected ChannelBuffer formatFrame(String frame) {
+            return ChannelBuffers.wrappedBuffer(
+                    jsonpCallback.getBytes(CharsetUtil.UTF_8),
+                    PRE_CALLBACK,
+                    new JsonStringEncoder().quoteAsUTF8(frame),
+                    POST_CALLBACK);
+        }
 
     }
 

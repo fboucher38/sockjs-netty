@@ -1,35 +1,68 @@
 package com.cgbystrom.sockjs.transports;
 
+import org.jboss.netty.channel.Channel;
+import org.jboss.netty.channel.ChannelFuture;
 import org.jboss.netty.channel.ChannelFutureListener;
 import org.jboss.netty.channel.ChannelHandlerContext;
 import org.jboss.netty.channel.Channels;
 import org.jboss.netty.channel.MessageEvent;
 import org.jboss.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 
-import com.cgbystrom.sockjs.frames.Frame;
-import com.cgbystrom.sockjs.frames.Frame.CloseFrame;
-import com.cgbystrom.sockjs.frames.Frame.MessageFrame;
+import com.cgbystrom.sockjs.handlers.SessionHandler;
 
 public class RawWebSocketTransport extends AbstractWebSocketTransport {
 
-    @Override
-    protected void handleReceivedTextWebSocketFrame(ChannelHandlerContext context, MessageEvent event,
-                                                    TextWebSocketFrame textWebSocketFrame) {
-        String message = textWebSocketFrame.getText();
-        Channels.fireMessageReceived(context, message);
+    public RawWebSocketTransport(SessionHandler sessionHandler) {
+        super(sessionHandler);
     }
 
     @Override
-    protected void handleWroteSockJsFrame(ChannelHandlerContext context, MessageEvent event, Frame frame) {
-        if(frame instanceof MessageFrame) {
-            for(String message : ((MessageFrame)frame).getMessages()) {
+    protected void webSocketReady(Channel channel) {
+        getSessionHandler().registerReceiver(new RawWebSocketReceiver(channel));
+    }
+
+    @Override
+    protected void textWebSocketFrameReceived(ChannelHandlerContext context, MessageEvent event,
+                                              TextWebSocketFrame textWebSocketFrame) {
+        String message = textWebSocketFrame.getText();
+        getSessionHandler().messageReceived(message);
+    }
+
+    private final class RawWebSocketReceiver extends GenericReceiver {
+
+        private ChannelFuture lastWriteFuture;
+
+        public RawWebSocketReceiver(Channel channel) {
+            super(channel);
+            lastWriteFuture = Channels.succeededFuture(channel);
+        }
+
+        @Override
+        public boolean doOpen() {
+            return false;
+        }
+
+        @Override
+        public boolean doWrite(String[] messages) {
+            for(String message : messages) {
                 TextWebSocketFrame textWebSocketFrame;
                 textWebSocketFrame = new TextWebSocketFrame(message);
-                Channels.write(context, event.getFuture(), textWebSocketFrame);
+                lastWriteFuture = getChannel().write(textWebSocketFrame);
             }
-        } else if(frame instanceof CloseFrame) {
-            event.getFuture().addListener(ChannelFutureListener.CLOSE);
+            return !isClosed();
         }
+
+        @Override
+        public boolean doHeartbeat() {
+            return !isClosed();
+        }
+
+        @Override
+        public boolean doClose(int aStatus, String aReason) {
+            lastWriteFuture.addListener(ChannelFutureListener.CLOSE);
+            return !isClosed();
+        }
+
     }
 
 }

@@ -1,17 +1,14 @@
 package com.cgbystrom.sockjs.pages;
 
-import static org.jboss.netty.handler.codec.http.HttpHeaders.Names.CACHE_CONTROL;
-import static org.jboss.netty.handler.codec.http.HttpHeaders.Names.CONTENT_TYPE;
-
 import java.util.Random;
 
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
-import org.jboss.netty.channel.ChannelFutureListener;
 import org.jboss.netty.channel.ChannelHandlerContext;
 import org.jboss.netty.channel.MessageEvent;
 import org.jboss.netty.channel.SimpleChannelHandler;
 import org.jboss.netty.handler.codec.http.DefaultHttpResponse;
+import org.jboss.netty.handler.codec.http.HttpHeaders;
 import org.jboss.netty.handler.codec.http.HttpRequest;
 import org.jboss.netty.handler.codec.http.HttpResponse;
 import org.jboss.netty.handler.codec.http.HttpResponseStatus;
@@ -34,14 +31,17 @@ public class InfoPage extends SimpleChannelHandler {
         HttpRequest request;
         request = (HttpRequest) event.getMessage();
 
+        ChannelBuffer infoBuffer;
+        infoBuffer = formatInfoForService(service);
+
         HttpResponse response;
         response = new DefaultHttpResponse(request.getProtocolVersion(), HttpResponseStatus.OK);
-        response.setHeader(CONTENT_TYPE, "application/json; charset=UTF-8");
-        response.setHeader(CACHE_CONTROL, "no-store, no-cache, must-revalidate, max-age=0");
-        response.setContent(formatInfoForService(service));
+        response.setHeader(HttpHeaders.Names.CONTENT_TYPE, "application/json; charset=UTF-8");
+        response.setHeader(HttpHeaders.Names.CACHE_CONTROL, "no-store, no-cache, must-revalidate, max-age=0");
+        response.setHeader(HttpHeaders.Names.CONTENT_LENGTH, infoBuffer.readableBytes());
+        response.setContent(infoBuffer);
 
-        context.getChannel().write(response).addListener(ChannelFutureListener.CLOSE);
-
+        context.getChannel().write(response);
     }
 
     private ChannelBuffer formatInfoForService(Service service) {

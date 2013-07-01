@@ -17,10 +17,6 @@ import org.jboss.netty.handler.codec.http.CookieEncoder;
 import org.jboss.netty.handler.codec.http.HttpRequest;
 import org.jboss.netty.handler.codec.http.HttpResponse;
 
-/**
- * @author fbou
- *
- */
 public class CookieHandler extends SimpleChannelHandler {
 
     private static final CookieDecoder COOKIE_DECODER = new CookieDecoder();

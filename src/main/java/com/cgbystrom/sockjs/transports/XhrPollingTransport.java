@@ -1,37 +1,40 @@
 package com.cgbystrom.sockjs.transports;
 
 import org.jboss.netty.buffer.ChannelBuffer;
-import org.jboss.netty.channel.ChannelFutureListener;
+import org.jboss.netty.buffer.ChannelBuffers;
+import org.jboss.netty.channel.Channel;
 import org.jboss.netty.channel.ChannelHandlerContext;
-import org.jboss.netty.channel.Channels;
 import org.jboss.netty.channel.MessageEvent;
-import org.jboss.netty.handler.codec.http.HttpHeaders;
 import org.jboss.netty.handler.codec.http.HttpResponse;
+import org.jboss.netty.util.CharsetUtil;
 
-import com.cgbystrom.sockjs.frames.Frame;
-import com.cgbystrom.sockjs.frames.FrameEncoder;
+import com.cgbystrom.sockjs.handlers.SessionHandler;
 
 public class XhrPollingTransport extends AbstractPollingTransport {
 
+    public XhrPollingTransport(SessionHandler sessionHandler) {
+        super(sessionHandler);
+    }
+
     @Override
-    public void writeRequested(ChannelHandlerContext context, MessageEvent event) throws Exception {
-        if (event.getMessage() instanceof Frame) {
-            Frame frame = (Frame) event.getMessage();
+    public void messageReceived(ChannelHandlerContext context, MessageEvent event) throws Exception {
+        HttpResponse response = createResponse(context.getChannel(), CONTENT_TYPE_JAVASCRIPT);
+        registerReceiver(new XhrResponseReceiver(context.getChannel(), response));
+    }
 
-            ChannelBuffer frameBuffer;
-            frameBuffer = FrameEncoder.encode(frame, true);
+    private class XhrResponseReceiver extends SingleResponseReceiver {
 
-            HttpResponse response = createResponse(context.getChannel(), CONTENT_TYPE_JAVASCRIPT);
-            response.setHeader(HttpHeaders.Names.CONTENT_LENGTH, frameBuffer.readableBytes());
-            response.setHeader(HttpHeaders.Names.CONNECTION, HttpHeaders.Values.CLOSE);
-            response.setContent(frameBuffer);
-
-            event.getFuture().addListener(ChannelFutureListener.CLOSE);
-            Channels.write(context, event.getFuture(), response);
-
-        } else {
-            super.writeRequested(context, event);
+        public XhrResponseReceiver(Channel aChannel, HttpResponse httpResponse) {
+            super(aChannel, httpResponse);
         }
+
+        @Override
+        protected ChannelBuffer formatFrame(String frame) {
+            return ChannelBuffers.wrappedBuffer(
+                    ChannelBuffers.copiedBuffer(frame, CharsetUtil.UTF_8),
+                    ChannelBuffers.copiedBuffer("\n", CharsetUtil.UTF_8));
+        }
+
     }
 
 }

@@ -9,10 +9,6 @@ import org.jboss.netty.channel.SimpleChannelDownstreamHandler;
 import org.jboss.netty.handler.codec.http.HttpHeaders;
 import org.jboss.netty.handler.codec.http.HttpResponse;
 
-/**
- * @author fbou
- *
- */
 public class NoCacheHandler extends SimpleChannelDownstreamHandler {
 
     @Override

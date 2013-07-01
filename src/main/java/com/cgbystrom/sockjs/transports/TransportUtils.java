@@ -1,72 +1,41 @@
 /**
  * 
  */
-package com.cgbystrom.sockjs.frames;
+package com.cgbystrom.sockjs.transports;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
-import org.jboss.netty.util.CharsetUtil;
 
-import com.cgbystrom.sockjs.frames.Frame.CloseFrame;
-import com.cgbystrom.sockjs.frames.Frame.HeartbeatFrame;
-import com.cgbystrom.sockjs.frames.Frame.MessageFrame;
-import com.cgbystrom.sockjs.frames.Frame.OpenFrame;
-import com.cgbystrom.sockjs.frames.Frame.PreludeFrame;
-import com.fasterxml.jackson.core.io.JsonStringEncoder;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
-/**
- * @author fbou
- *
- */
-public class FrameEncoder {
+public final class TransportUtils {
 
-    public static ChannelBuffer encode(Frame frame, boolean appendNewline) {
-        if (frame instanceof OpenFrame) {
-            return appendNewline ? ChannelBuffers.copiedBuffer("o\n", CharsetUtil.UTF_8) : ChannelBuffers.copiedBuffer("o", CharsetUtil.UTF_8);
-        } else if (frame instanceof HeartbeatFrame) {
-            return appendNewline ? ChannelBuffers.copiedBuffer("h\n", CharsetUtil.UTF_8) : ChannelBuffers.copiedBuffer("h", CharsetUtil.UTF_8);
-        } else if (frame instanceof PreludeFrame) {
-            return appendNewline ? generatePreludeFrame('h', 2048, true) : generatePreludeFrame('h', 2048, false);
-        } else if (frame instanceof MessageFrame) {
-            ChannelBuffer encodedMessageFrame;
-            encodedMessageFrame = encoderMessageFrame((MessageFrame)frame);
-            return appendNewline ? ChannelBuffers.wrappedBuffer(encodedMessageFrame, ChannelBuffers.copiedBuffer("\n", CharsetUtil.UTF_8)) : encodedMessageFrame;
-        }  else if (frame instanceof CloseFrame) {
-            ChannelBuffer encodedCloseFrame;
-            encodedCloseFrame = encoderCloseFrame((CloseFrame)frame);
-            return appendNewline ? ChannelBuffers.wrappedBuffer(encodedCloseFrame, ChannelBuffers.copiedBuffer("\n", CharsetUtil.UTF_8)) : encodedCloseFrame;
-        } else {
-            throw new IllegalArgumentException("Unknown frame type passed: " + frame.getClass().getSimpleName());
-        }
-    }
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
-    private static ChannelBuffer encoderCloseFrame(CloseFrame frame) {
-        return ChannelBuffers.copiedBuffer("c[" + frame.getStatus() + ",\"" + frame.getReason() + "\"]", CharsetUtil.UTF_8);
-    }
-
-    private static ChannelBuffer encoderMessageFrame(MessageFrame frame) {
-        String[] messages;
-        messages = frame.getMessages();
-        ChannelBuffer data;
-        data = ChannelBuffers.dynamicBuffer();
-        data.writeByte('a');
-        data.writeByte('[');
-        for (int i = 0; i < messages.length; i++) {
-            String message = messages[i];
-            data.writeByte('"');
-            char[] escaped = new JsonStringEncoder().quoteAsString(message);
-            data.writeBytes(ChannelBuffers.copiedBuffer(escapeCharacters(escaped), CharsetUtil.UTF_8));
-            data.writeByte('"');
-            if (i < messages.length - 1) {
-                data.writeByte(',');
+    public static String[] decodeMessage(String content) throws JsonProcessingException, IOException {
+        JsonNode jsonContent = OBJECT_MAPPER.readTree(content);
+        String[] messagesArray;
+        if(jsonContent.isArray()) {
+            List<String> messages = new ArrayList<String>();
+            for(JsonNode messageNode : jsonContent) {
+                messages.add(messageNode.asText());
             }
+            messagesArray = messages.toArray(new String[messages.size()]);
+        } else if(jsonContent.isTextual()) {
+            messagesArray = new String[] {jsonContent.asText()};
+        } else {
+            throw new IllegalArgumentException("Invalid content");
         }
-        data.writeByte(']');
-
-        return data;
+        return messagesArray;
     }
 
-    private static ChannelBuffer generatePreludeFrame(char c, int num, boolean appendNewline) {
+    public static ChannelBuffer generatePrelude(char c, int num, boolean appendNewline) {
         ChannelBuffer cb = ChannelBuffers.buffer(num + 1);
         for (int i = 0; i < num; i++) {
             cb.writeByte(c);
@@ -76,7 +45,7 @@ public class FrameEncoder {
         return cb;
     }
 
-    private static String escapeCharacters(char[] value) {
+    public static String escapeCharacters(char[] value) {
         StringBuilder buffer = new StringBuilder();
         for (int i = 0; i < value.length; i++) {
             char ch = value[i];

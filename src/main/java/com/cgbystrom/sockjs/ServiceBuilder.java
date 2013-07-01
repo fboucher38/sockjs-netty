@@ -8,7 +8,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 
-import com.cgbystrom.sockjs.handlers.SessionHandler;
+import com.cgbystrom.sockjs.handlers.SimpleSessionHandler;
 
 public final class ServiceBuilder {
 
@@ -35,8 +35,8 @@ public final class ServiceBuilder {
         this.isWebSocketEnabled = isWebSocketEnabled;
     }
 
-    public void setMaxResponseSize(int maxResponseSize) {
-        this.maxResponseSize = maxResponseSize;
+    public void setResponseSizeLimit(int responseSizeLimit) {
+        this.maxResponseSize = responseSizeLimit;
     }
 
     public void setJsessionidEnabled(boolean jsessionidEnabled) {
@@ -72,26 +72,26 @@ public final class ServiceBuilder {
     private static class ServiceImpl implements Service {
 
         private final String                                url;
-        private final ConcurrentMap<String, SessionHandler> sessions;
+        private final ConcurrentMap<String, SimpleSessionHandler> sessions;
         private final SessionCallbackFactory                factory;
         private final boolean                               isWebSocketEnabled;
-        private final int                                   maxResponseSize;
+        private final int                                   responseSizeLimit;
         private final boolean                               jsessionidEnabled;
         private final ScheduledExecutorService              scheduledExecutor;
         private final Integer                               timeoutDelay;
         private final Integer                               hreatbeatDelay;
 
-        public ServiceImpl(String url, SessionCallbackFactory factory, boolean isWebSocketEnabled, int maxResponseSize,
+        public ServiceImpl(String url, SessionCallbackFactory factory, boolean isWebSocketEnabled, int responseSizeLimit,
                            boolean jsessionid, ScheduledExecutorService scheduledExecutor, Integer timeoutDelay, Integer hreatbeatDelay) {
             this.url = url;
             this.factory = factory;
             this.isWebSocketEnabled = isWebSocketEnabled;
-            this.maxResponseSize = maxResponseSize;
+            this.responseSizeLimit = responseSizeLimit;
             this.jsessionidEnabled = jsessionid;
             this.scheduledExecutor = scheduledExecutor;
             this.timeoutDelay = timeoutDelay;
             this.hreatbeatDelay = hreatbeatDelay;
-            this.sessions = new ConcurrentHashMap<String, SessionHandler>();
+            this.sessions = new ConcurrentHashMap<String, SimpleSessionHandler>();
         }
 
         @Override
@@ -111,7 +111,7 @@ public final class ServiceBuilder {
 
         @Override
         public int getResponseSizeLimit() {
-            return maxResponseSize;
+            return responseSizeLimit;
         }
 
         @Override
@@ -120,12 +120,12 @@ public final class ServiceBuilder {
         }
 
         @Override
-        public SessionHandler getOrCreateSession(String sessionId) {
-            SessionHandler session;
+        public SimpleSessionHandler getOrCreateSession(String sessionId) {
+            SimpleSessionHandler session;
 
             session = sessions.get(sessionId);
             if (session == null) {
-                SessionHandler newSession;
+                SimpleSessionHandler newSession;
 
                 newSession = newSession(sessionId);
                 session = sessions.putIfAbsent(sessionId, newSession);
@@ -138,8 +138,8 @@ public final class ServiceBuilder {
         }
 
         @Override
-        public SessionHandler getSession(String sessionId) throws SessionNotFound {
-            SessionHandler session;
+        public SimpleSessionHandler getSession(String sessionId) throws SessionNotFound {
+            SimpleSessionHandler session;
 
             session = sessions.get(sessionId);
             if (session == null) {
@@ -155,11 +155,11 @@ public final class ServiceBuilder {
          * @throws Exception
          */
         @Override
-        public SessionHandler forceCreateSession(String sessionId) {
-            SessionHandler newSession;
+        public SimpleSessionHandler forceCreateSession(String sessionId) {
+            SimpleSessionHandler newSession;
             newSession = newSession(sessionId);
 
-            SessionHandler oldSession;
+            SimpleSessionHandler oldSession;
             oldSession = sessions.replace(sessionId, newSession);
 
             if (oldSession != null) {
@@ -174,7 +174,7 @@ public final class ServiceBuilder {
          * @return the removed session or null if not found
          */
         @Override
-        public SessionHandler removeSession(SessionHandler aSessionHandler) {
+        public SimpleSessionHandler removeSession(SimpleSessionHandler aSessionHandler) {
             return sessions.remove(aSessionHandler);
         }
 
@@ -183,7 +183,7 @@ public final class ServiceBuilder {
          * @return
          * @throws Exception
          */
-        private SessionHandler newSession(final String sessionId) {
+        private SimpleSessionHandler newSession(final String sessionId) {
             Runnable disposer;
             disposer = new Runnable() {
                 @Override
@@ -191,14 +191,14 @@ public final class ServiceBuilder {
                     sessions.remove(sessionId);
                 }
             };
-            return new SessionHandler(sessionId, factory.createSessionCallback(sessionId), scheduledExecutor,
+            return new SimpleSessionHandler(sessionId, factory.createSessionCallback(sessionId), scheduledExecutor,
                     timeoutDelay, hreatbeatDelay, disposer);
         }
 
         @Override
         public String toString() {
-            return "Service [url=" + url + ", isWebSocketEnabled=" + isWebSocketEnabled + ", responseLimit="
-                    + maxResponseSize + ", jsessionidEnabled=" + jsessionidEnabled + ", timeoutDelay=" + timeoutDelay
+            return "Service [url=" + url + ", isWebSocketEnabled=" + isWebSocketEnabled + ", responseSizeLimit="
+                    + responseSizeLimit + ", jsessionidEnabled=" + jsessionidEnabled + ", timeoutDelay=" + timeoutDelay
                     + ", hreatbeatDelay=" + hreatbeatDelay + "]";
         }
 

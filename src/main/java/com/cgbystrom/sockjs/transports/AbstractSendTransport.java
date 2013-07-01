@@ -5,9 +5,6 @@ import static org.jboss.netty.handler.codec.http.HttpResponseStatus.INTERNAL_SER
 import java.util.List;
 
 import org.jboss.netty.channel.ChannelHandlerContext;
-import org.jboss.netty.channel.ChannelStateEvent;
-import org.jboss.netty.channel.Channels;
-import org.jboss.netty.channel.ExceptionEvent;
 import org.jboss.netty.channel.MessageEvent;
 import org.jboss.netty.handler.codec.http.HttpHeaders;
 import org.jboss.netty.handler.codec.http.HttpRequest;
@@ -15,17 +12,20 @@ import org.jboss.netty.handler.codec.http.HttpResponseStatus;
 import org.jboss.netty.handler.codec.http.QueryStringDecoder;
 import org.jboss.netty.util.CharsetUtil;
 
-import com.cgbystrom.sockjs.Service.SessionNotFound;
-import com.cgbystrom.sockjs.frames.FrameDecoder;
+import com.cgbystrom.sockjs.handlers.SessionHandler;
 
 public abstract class AbstractSendTransport extends AbstractTransport {
 
+    public AbstractSendTransport(SessionHandler sessionHandler) {
+        super(sessionHandler);
+    }
+
     @Override
-    public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) throws Exception {
-        HttpRequest request = (HttpRequest) e.getMessage();
+    public void messageReceived(ChannelHandlerContext context, MessageEvent event) throws Exception {
+        HttpRequest request = (HttpRequest) event.getMessage();
 
         if (request.getContent().readableBytes() == 0) {
-            respondAndClose(e.getChannel(), INTERNAL_SERVER_ERROR, "Payload expected.");
+            respondAndClose(event.getChannel(), INTERNAL_SERVER_ERROR, "Payload expected.");
             return;
         }
 
@@ -39,7 +39,7 @@ public abstract class AbstractSendTransport extends AbstractTransport {
             QueryStringDecoder decoder = new QueryStringDecoder("?" + request.getContent().toString(CharsetUtil.UTF_8));
             List<String> d = decoder.getParameters().get("d");
             if (d == null) {
-                respondAndClose(e.getChannel(), HttpResponseStatus.INTERNAL_SERVER_ERROR, "Payload expected.");
+                respondAndClose(event.getChannel(), HttpResponseStatus.INTERNAL_SERVER_ERROR, "Payload expected.");
                 return;
             }
             decodedContent = d.get(0);
@@ -48,29 +48,17 @@ public abstract class AbstractSendTransport extends AbstractTransport {
         }
 
         if (decodedContent.length() == 0) {
-            respondAndClose(e.getChannel(), HttpResponseStatus.INTERNAL_SERVER_ERROR, "Payload expected.");
+            respondAndClose(event.getChannel(), HttpResponseStatus.INTERNAL_SERVER_ERROR, "Payload expected.");
             return;
         }
 
         String[] decodedMessageArray;
-        decodedMessageArray = FrameDecoder.decodeMessage(decodedContent);
+        decodedMessageArray = TransportUtils.decodeMessage(decodedContent);
         for(String message : decodedMessageArray) {
-            Channels.fireMessageReceived(ctx, message);
+            getSessionHandler().messageReceived(message);
         }
-    }
 
-    @Override
-    public void channelClosed(ChannelHandlerContext context, ChannelStateEvent event) throws Exception {
-        // do not forward
-    }
-
-    @Override
-    public void exceptionCaught(ChannelHandlerContext context, ExceptionEvent event) throws Exception {
-        if(event.getCause() instanceof SessionNotFound) {
-            respondAndClose(context.getChannel(), HttpResponseStatus.NOT_FOUND, "Session not found");
-        } else {
-            super.exceptionCaught(context, event);
-        }
+        event.getFuture().addListener(CLOSE_IF_NOT_KEEP_ALIVE);
     }
 
 }

@@ -28,19 +28,12 @@ import com.cgbystrom.sockjs.transports.EventSourceTransport;
 import com.cgbystrom.sockjs.transports.HtmlFileTransport;
 import com.cgbystrom.sockjs.transports.JsonpPollingTransport;
 import com.cgbystrom.sockjs.transports.JsonpSendTransport;
-import com.cgbystrom.sockjs.transports.RawWebSocketTransport;
 import com.cgbystrom.sockjs.transports.WebSocketTransport;
 import com.cgbystrom.sockjs.transports.XhrPollingTransport;
 import com.cgbystrom.sockjs.transports.XhrSendTransport;
 import com.cgbystrom.sockjs.transports.XhrStreamingTransport;
 
-/**
- * @author fbou
- *
- */
 public class TransportRouterHandler extends SimpleChannelHandler {
-
-    private enum SessionCreation { CREATE_OR_REUSE, FORCE_REUSE, FORCE_CREATE }
 
     private static final Pattern SERVER_SESSION = Pattern.compile("^/([^/.]+)/([^/.]+)/([^?.]+)");
     private static final Random RANDOM = new Random();
@@ -64,14 +57,20 @@ public class TransportRouterHandler extends SimpleChannelHandler {
             response.setHeader(CONTENT_TYPE, AbstractTransport.CONTENT_TYPE_PLAIN);
             response.setContent(ChannelBuffers.copiedBuffer("Welcome to SockJS!\n", CharsetUtil.UTF_8));
             event.getChannel().write(response);
+
         } else if (requestUriSuffix.startsWith("/iframe")) {
             context.getPipeline().addLast("sockjs-iframe", new IframePage(sockjsUrl));
+
         } else if (requestUriSuffix.startsWith("/info")) {
             context.getPipeline().addLast("sockjs-nocache", new NoCacheHandler());
             context.getPipeline().addLast("sockjs-info", new InfoPage(service));
+
         } else if (requestUriSuffix.startsWith("/websocket")) {
-            context.getPipeline().addLast("sockjs-websocket", new RawWebSocketTransport());
-            context.getPipeline().addLast("sockjs-handler", service.forceCreateSession("rawwebsocket-" + RANDOM.nextLong()));
+            SessionHandler newSession;
+            newSession = service.forceCreateSession("rawwebsocket-" + RANDOM.nextLong());
+            /*context.getPipeline().addLast("sockjs-websocket",
+                    new RawWebSocketTransport(newSession, new SimpleReceiver(event.getChannel())));*/
+
         } else {
             if (!handleSession(context, event, requestUriSuffix)) {
                 HttpResponse response;
@@ -85,7 +84,7 @@ public class TransportRouterHandler extends SimpleChannelHandler {
         super.messageReceived(context, event);
     }
 
-    private boolean handleSession(ChannelHandlerContext ctx, MessageEvent e, String path)
+    private boolean handleSession(ChannelHandlerContext context, MessageEvent event, String path)
             throws Exception {
         Matcher m = SERVER_SESSION.matcher(path);
 
@@ -97,64 +96,62 @@ public class TransportRouterHandler extends SimpleChannelHandler {
         String transport = m.group(3);
 
         ChannelPipeline pipeline;
-        pipeline = ctx.getPipeline();
-
-        SessionCreation sessionCreation;
-        sessionCreation = SessionCreation.CREATE_OR_REUSE;
+        pipeline = context.getPipeline();
 
         if (transport.equals("xhr_send")) {
             pipeline.addLast("sockjs-cookie", new CookieHandler());
             pipeline.addLast("sockjs-nocache", new NoCacheHandler());
-            pipeline.addLast("sockjs-xhr-send", new XhrSendTransport());
-            sessionCreation = SessionCreation.FORCE_REUSE; // Expect an existing session
+            pipeline.addLast("sockjs-xhr-send",
+                    new XhrSendTransport(service.getSession(sessionId))); // Expect an existing session
+
         } else if (transport.equals("jsonp_send")) {
             pipeline.addLast("sockjs-cookie", new CookieHandler());
             pipeline.addLast("sockjs-nocache", new NoCacheHandler());
-            pipeline.addLast("sockjs-jsonp-send", new JsonpSendTransport());
-            sessionCreation = SessionCreation.FORCE_REUSE; // Expect an existing session
+            pipeline.addLast("sockjs-jsonp-send",
+                    new JsonpSendTransport(service.getSession(sessionId))); // Expect an existing session
+
         } else if (transport.equals("xhr_streaming")) {
             pipeline.addLast("sockjs-cookie", new CookieHandler());
             pipeline.addLast("sockjs-nocache", new NoCacheHandler());
-            pipeline.addLast("sockjs-xhr-streaming", new XhrStreamingTransport());
+            pipeline.addLast("sockjs-xhr-streaming",
+                    new XhrStreamingTransport(
+                            service.getOrCreateSession(sessionId), service.getResponseSizeLimit()));
+
         } else if (transport.equals("xhr")) {
             pipeline.addLast("sockjs-cookie", new CookieHandler());
             pipeline.addLast("sockjs-nocache", new NoCacheHandler());
-            pipeline.addLast("sockjs-xhr-polling", new XhrPollingTransport());
+            pipeline.addLast("sockjs-xhr-polling",
+                    new XhrPollingTransport(
+                            service.getOrCreateSession(sessionId)));
+
         } else if (transport.equals("jsonp")) {
             pipeline.addLast("sockjs-cookie", new CookieHandler());
             pipeline.addLast("sockjs-nocache", new NoCacheHandler());
-            pipeline.addLast("sockjs-jsonp-polling", new JsonpPollingTransport());
+            pipeline.addLast("sockjs-jsonp-polling",
+                    new JsonpPollingTransport(
+                            service.getOrCreateSession(sessionId)));
+
         } else if (transport.equals("htmlfile")) {
             pipeline.addLast("sockjs-cookie", new CookieHandler());
             pipeline.addLast("sockjs-nocache", new NoCacheHandler());
-            pipeline.addLast("sockjs-htmlfile-polling", new HtmlFileTransport());
+            pipeline.addLast("sockjs-htmlfile-polling",
+                    new HtmlFileTransport(
+                            service.getOrCreateSession(sessionId), service.getResponseSizeLimit()));
+
         } else if (transport.equals("eventsource")) {
             pipeline.addLast("sockjs-cookie", new CookieHandler());
             pipeline.addLast("sockjs-nocache", new NoCacheHandler());
-            pipeline.addLast("sockjs-eventsource", new EventSourceTransport());
+            pipeline.addLast("sockjs-eventsource",
+                    new EventSourceTransport(
+                            service.getOrCreateSession(sessionId), service.getResponseSizeLimit()));
+
         } else if (transport.equals("websocket")) {
-            pipeline.addLast("sockjs-websocket", new WebSocketTransport());
-            sessionCreation = SessionCreation.FORCE_CREATE; // Websockets should re-create a session every time
+            pipeline.addLast("sockjs-websocket",
+                    new WebSocketTransport(service.forceCreateSession(sessionId)));
+
         } else {
             return false;
         }
-
-        SessionHandler sessionHandler = null;
-        switch (sessionCreation) {
-            case CREATE_OR_REUSE:
-                sessionHandler = service.getOrCreateSession(sessionId);;
-                break;
-            case FORCE_REUSE:
-                sessionHandler = service.getSession(sessionId);
-                break;
-            case FORCE_CREATE:
-                sessionHandler = service.forceCreateSession(sessionId);
-                break;
-            default:
-                throw new Exception("Unknown sessionCreation value: " + sessionCreation);
-        }
-
-        pipeline.addLast("sockjs-handler", sessionHandler);
 
         return true;
     }

@@ -4,6 +4,7 @@
 package com.cgbystrom.sockjs;
 
 import com.cgbystrom.sockjs.handlers.SessionHandler;
+import com.cgbystrom.sockjs.handlers.SimpleSessionHandler;
 
 public interface Service {
 
@@ -23,7 +24,7 @@ public interface Service {
 
     public SessionHandler forceCreateSession(String sessionId) throws SessionNotFound;
 
-    public SessionHandler removeSession(SessionHandler aSessionHandler);
+    public SessionHandler removeSession(SimpleSessionHandler aSessionHandler);
 
     public class SessionNotFound extends Exception {
 
