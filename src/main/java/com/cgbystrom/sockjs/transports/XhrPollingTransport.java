@@ -18,6 +18,8 @@ public class XhrPollingTransport extends AbstractPollingTransport {
 
     @Override
     public void messageReceived(ChannelHandlerContext context, MessageEvent event) throws Exception {
+        super.messageReceived(context, event);
+
         HttpResponse response = createResponse(context.getChannel(), CONTENT_TYPE_JAVASCRIPT);
         registerReceiver(new XhrResponseReceiver(context.getChannel(), response));
     }

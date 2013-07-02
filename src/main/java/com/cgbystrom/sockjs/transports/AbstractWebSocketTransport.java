@@ -25,7 +25,6 @@ import org.jboss.netty.handler.codec.http.websocketx.WebSocketServerHandshaker;
 import org.jboss.netty.handler.codec.http.websocketx.WebSocketServerHandshakerFactory;
 import org.jboss.netty.handler.ssl.SslHandler;
 
-import com.cgbystrom.sockjs.Service;
 import com.cgbystrom.sockjs.handlers.PreflightHandler;
 import com.cgbystrom.sockjs.handlers.ServiceRouterHandler;
 import com.cgbystrom.sockjs.handlers.SessionHandler;
@@ -67,11 +66,9 @@ public abstract class AbstractWebSocketTransport extends AbstractReceiverTranspo
         }
     }
 
-    private void handleHttpRequest(final ChannelHandlerContext context, MessageEvent event, HttpRequest req) throws Exception {
-        Channel channel = event.getChannel();
-
+    private void handleHttpRequest(final ChannelHandlerContext context, MessageEvent event, HttpRequest request) throws Exception {
         // Allow only GET methods.
-        if (req.getMethod() != GET) {
+        if (request.getMethod() != GET) {
             DefaultHttpResponse response = new DefaultHttpResponse(HTTP_1_1, METHOD_NOT_ALLOWED);
             response.addHeader(HttpHeaders.Names.ALLOW, GET.toString());
             response.setHeader(HttpHeaders.Names.CONNECTION, Values.CLOSE);
@@ -80,27 +77,27 @@ public abstract class AbstractWebSocketTransport extends AbstractReceiverTranspo
         }
 
         // Compatibility hack for Firefox 6.x
-        String connectionHeader = req.getHeader(HttpHeaders.Names.CONNECTION);
+        String connectionHeader = request.getHeader(HttpHeaders.Names.CONNECTION);
         if (connectionHeader != null && connectionHeader.equals("keep-alive, Upgrade")) {
-            req.setHeader(HttpHeaders.Names.CONNECTION, HttpHeaders.Names.UPGRADE);
+            request.setHeader(HttpHeaders.Names.CONNECTION, HttpHeaders.Names.UPGRADE);
         }
 
         // If we get WS version 7, treat it as 8 as they are almost identical.
         // (Really true?)
-        String wsVersionHeader = req.getHeader(HttpHeaders.Names.SEC_WEBSOCKET_VERSION);
+        String wsVersionHeader = request.getHeader(HttpHeaders.Names.SEC_WEBSOCKET_VERSION);
         if (wsVersionHeader != null && wsVersionHeader.equals("7")) {
-            req.setHeader(HttpHeaders.Names.SEC_WEBSOCKET_VERSION, "8");
+            request.setHeader(HttpHeaders.Names.SEC_WEBSOCKET_VERSION, "8");
         }
 
         // Handshake
-        String wsLocation = getWebSocketLocation(channel);
-        WebSocketServerHandshakerFactory wsFactory = new WebSocketServerHandshakerFactory(wsLocation, null, false);
+        String websocketUri = formatWebSocketLocation(event.getChannel(), request);
+        WebSocketServerHandshakerFactory wsFactory = new WebSocketServerHandshakerFactory(websocketUri, null, false);
 
-        handshaker = wsFactory.newHandshaker(req);
+        handshaker = wsFactory.newHandshaker(request);
         if (handshaker == null) {
             wsFactory.sendUnsupportedWebSocketVersionResponse(context.getChannel());
         } else {
-            handshaker.handshake(context.getChannel(), req).addListener(new ChannelFutureListener() {
+            handshaker.handshake(context.getChannel(), request).addListener(new ChannelFutureListener() {
                 @Override
                 public void operationComplete(ChannelFuture future) throws Exception {
                     if (future.isSuccess()) {
@@ -133,14 +130,9 @@ public abstract class AbstractWebSocketTransport extends AbstractReceiverTranspo
         textWebSocketFrameReceived(context, event, textWebSocketFrame);
     }
 
-    private String getWebSocketLocation(Channel channel) {
-        boolean isSsl = channel.getPipeline().get(SslHandler.class) != null;
-        HttpRequest request = ServiceRouterHandler.getRequestForChannel(channel);
-        Service service = ServiceRouterHandler.getServiceForChannel(channel);
-        if (isSsl) {
-            return "wss://" + request.getHeader(HttpHeaders.Names.HOST) + service.getUrl();
-        } else {
-            return "ws://" + request.getHeader(HttpHeaders.Names.HOST) + service.getUrl();
-        }
+    private String formatWebSocketLocation(Channel channel, HttpRequest request) {
+        boolean isSslEnabled = channel.getPipeline().get(SslHandler.class) != null;
+        return isSslEnabled ? "wss://" : "ws://" + request.getHeader(HttpHeaders.Names.HOST) + request.getUri();
     }
+
 }

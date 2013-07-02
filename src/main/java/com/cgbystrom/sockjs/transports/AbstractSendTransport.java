@@ -4,6 +4,7 @@ import static org.jboss.netty.handler.codec.http.HttpResponseStatus.INTERNAL_SER
 
 import java.util.List;
 
+import org.jboss.netty.channel.ChannelFutureListener;
 import org.jboss.netty.channel.ChannelHandlerContext;
 import org.jboss.netty.channel.MessageEvent;
 import org.jboss.netty.handler.codec.http.HttpHeaders;
@@ -22,6 +23,8 @@ public abstract class AbstractSendTransport extends AbstractTransport {
 
     @Override
     public void messageReceived(ChannelHandlerContext context, MessageEvent event) throws Exception {
+        super.messageReceived(context, event);
+
         HttpRequest request = (HttpRequest) event.getMessage();
 
         if (request.getContent().readableBytes() == 0) {
@@ -58,7 +61,9 @@ public abstract class AbstractSendTransport extends AbstractTransport {
             getSessionHandler().messageReceived(message);
         }
 
-        event.getFuture().addListener(CLOSE_IF_NOT_KEEP_ALIVE);
+        if(!isKeepAliveEnabled()) {
+            event.getFuture().addListener(ChannelFutureListener.CLOSE);
+        }
     }
 
 }

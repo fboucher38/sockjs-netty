@@ -27,6 +27,8 @@ public class EventSourceTransport extends AbstractStreamingTransport {
 
     @Override
     public void messageReceived(ChannelHandlerContext context, MessageEvent event) throws Exception {
+        super.messageReceived(context, event);
+
         HttpResponse response = createResponse(context.getChannel(), CONTENT_TYPE_EVENT_STREAM);
         Channels.write(context, Channels.succeededFuture(event.getChannel()), response);
         Channels.write(context, Channels.succeededFuture(event.getChannel()), new DefaultHttpChunk(ChannelBuffers.copiedBuffer("\r\n", CharsetUtil.UTF_8)));

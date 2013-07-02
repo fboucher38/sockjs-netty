@@ -45,6 +45,8 @@ public class HtmlFileTransport extends AbstractStreamingTransport {
 
     @Override
     public void messageReceived(ChannelHandlerContext context, MessageEvent event) throws Exception {
+        super.messageReceived(context, event);
+
         HttpRequest request = (HttpRequest) event.getMessage();
         QueryStringDecoder requestUriDecoder = new QueryStringDecoder(request.getUri());
 

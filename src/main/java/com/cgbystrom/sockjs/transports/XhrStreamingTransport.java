@@ -32,6 +32,8 @@ public class XhrStreamingTransport extends AbstractStreamingTransport {
 
     @Override
     public void messageReceived(ChannelHandlerContext context, MessageEvent event) throws Exception {
+        super.messageReceived(context, event);
+
         HttpResponse response = createResponse(context.getChannel(), CONTENT_TYPE_JAVASCRIPT);
         Channels.write(context, Channels.succeededFuture(event.getChannel()), response);
 

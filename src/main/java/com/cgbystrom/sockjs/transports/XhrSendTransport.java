@@ -15,7 +15,8 @@ public class XhrSendTransport extends AbstractSendTransport {
     @Override
     public void messageReceived(ChannelHandlerContext context, MessageEvent event) throws Exception {
         super.messageReceived(context, event);
-        respond(event.getChannel(), HttpResponseStatus.NO_CONTENT, "ok");
+
+        respond(event.getChannel(), HttpResponseStatus.NO_CONTENT);
     }
 
 }

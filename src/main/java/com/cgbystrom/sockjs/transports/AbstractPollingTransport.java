@@ -2,6 +2,8 @@ package com.cgbystrom.sockjs.transports;
 
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.channel.Channel;
+import org.jboss.netty.channel.ChannelFuture;
+import org.jboss.netty.channel.ChannelFutureListener;
 import org.jboss.netty.handler.codec.http.HttpHeaders;
 import org.jboss.netty.handler.codec.http.HttpResponse;
 
@@ -37,7 +39,12 @@ public abstract class AbstractPollingTransport extends AbstractReceiverTransport
                 httpResponse.setHeader(HttpHeaders.Names.CONTENT_LENGTH, contentBuffer.readableBytes());
                 httpResponse.setContent(contentBuffer);
 
-                getChannel().write(httpResponse).addListener(CLOSE_IF_NOT_KEEP_ALIVE);
+                ChannelFuture writeFuture;
+                writeFuture = getChannel().write(httpResponse);
+
+                if(!isKeepAliveEnabled()) {
+                    writeFuture.addListener(ChannelFutureListener.CLOSE);
+                }
 
                 setClosed();
             }

@@ -52,7 +52,7 @@ public class InfoPage extends SimpleChannelHandler {
         sb.append(", ");
         sb.append("\"origins\": [\"*:*\"], ");
         sb.append("\"cookie_needed\": ");
-        sb.append(service.isJsessionid());
+        sb.append(service.isJsessionidEnabled());
         sb.append(", ");
         sb.append("\"entropy\": ");
         sb.append(RANDOM.nextInt(Integer.MAX_VALUE) + 1);

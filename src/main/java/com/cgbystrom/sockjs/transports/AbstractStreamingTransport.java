@@ -2,6 +2,8 @@ package com.cgbystrom.sockjs.transports;
 
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.channel.Channel;
+import org.jboss.netty.channel.ChannelFuture;
+import org.jboss.netty.channel.ChannelFutureListener;
 import org.jboss.netty.handler.codec.http.DefaultHttpChunk;
 import org.jboss.netty.handler.codec.http.HttpChunk;
 import org.jboss.netty.handler.codec.http.HttpHeaders;
@@ -59,7 +61,12 @@ public abstract class AbstractStreamingTransport extends AbstractReceiverTranspo
         protected boolean setClosed() {
             boolean closing = super.setClosed();
             if(closing) {
-                getChannel().write(HttpChunk.LAST_CHUNK).addListener(CLOSE_IF_NOT_KEEP_ALIVE);
+                ChannelFuture writeFuture;
+                writeFuture = getChannel().write(HttpChunk.LAST_CHUNK);
+
+                if(!isKeepAliveEnabled()) {
+                    writeFuture.addListener(ChannelFutureListener.CLOSE);
+                }
             }
             return closing;
         }

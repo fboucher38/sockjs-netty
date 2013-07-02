@@ -3,10 +3,10 @@ package com.cgbystrom.sockjs.transports;
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
 import org.jboss.netty.channel.Channel;
-import org.jboss.netty.channel.ChannelFuture;
 import org.jboss.netty.channel.ChannelFutureListener;
 import org.jboss.netty.channel.ChannelHandlerContext;
 import org.jboss.netty.channel.ExceptionEvent;
+import org.jboss.netty.channel.MessageEvent;
 import org.jboss.netty.channel.SimpleChannelHandler;
 import org.jboss.netty.handler.codec.http.DefaultHttpResponse;
 import org.jboss.netty.handler.codec.http.HttpHeaders;
@@ -16,7 +16,6 @@ import org.jboss.netty.handler.codec.http.HttpResponseStatus;
 import org.jboss.netty.handler.codec.http.HttpVersion;
 import org.jboss.netty.util.CharsetUtil;
 
-import com.cgbystrom.sockjs.handlers.ServiceRouterHandler;
 import com.cgbystrom.sockjs.handlers.SessionHandler;
 
 public abstract class AbstractTransport extends SimpleChannelHandler {
@@ -26,22 +25,23 @@ public abstract class AbstractTransport extends SimpleChannelHandler {
     public static final String CONTENT_TYPE_PLAIN = "text/plain; charset=UTF-8";
     public static final String CONTENT_TYPE_HTML = "text/html; charset=UTF-8";
 
-    public static final ChannelFutureListener CLOSE_IF_NOT_KEEP_ALIVE = new ChannelFutureListener() {
-        @Override
-        public void operationComplete(ChannelFuture future) throws Exception {
-            if(future.isSuccess() && future.getChannel().isOpen() && !isRequestKeepAlive(future.getChannel())) {
-                future.getChannel().close();
-            }
-        }
-    };
-
     private final SessionHandler sessionHandler;
+
+    private Boolean isKeepAliveEnabled = null;
 
     public AbstractTransport(SessionHandler sessionHandler) {
         if(sessionHandler == null) {
             throw new NullPointerException("sessionHandler");
         }
         this.sessionHandler = sessionHandler;
+    }
+
+    @Override
+    public void messageReceived(ChannelHandlerContext context, MessageEvent event) throws Exception {
+        HttpRequest request = (HttpRequest) event.getMessage();
+
+        isKeepAliveEnabled = request.getHeaders(HttpHeaders.Names.CONNECTION).isEmpty()
+                || !request.getHeaders(HttpHeaders.Names.CONNECTION).contains(HttpHeaders.Values.CLOSE);
     }
 
     @Override
@@ -56,11 +56,18 @@ public abstract class AbstractTransport extends SimpleChannelHandler {
         return sessionHandler;
     }
 
+    public boolean isKeepAliveEnabled() {
+        if(isKeepAliveEnabled == null) {
+            throw new NullPointerException("isKeepAliveEnabled not initialized");
+        }
+        return isKeepAliveEnabled;
+    }
+
     protected HttpResponse createResponse(Channel channel, String contentType, HttpResponseStatus status) {
         HttpResponse response;
         response = new DefaultHttpResponse(HttpVersion.HTTP_1_1, status);
         response.setHeader(HttpHeaders.Names.CONTENT_TYPE, contentType);
-        response.setHeader(HttpHeaders.Names.CONNECTION,  isRequestKeepAlive(channel) ? HttpHeaders.Values.KEEP_ALIVE : HttpHeaders.Values.CLOSE);
+        response.setHeader(HttpHeaders.Names.CONNECTION,  isKeepAliveEnabled() ? HttpHeaders.Values.KEEP_ALIVE : HttpHeaders.Values.CLOSE);
 
         return response;
     }
@@ -81,6 +88,14 @@ public abstract class AbstractTransport extends SimpleChannelHandler {
         channel.write(response);
     }
 
+    protected void respond(Channel channel, HttpResponseStatus status) throws Exception {
+        HttpResponse response;
+        response = createResponse(channel, AbstractTransport.CONTENT_TYPE_PLAIN, status);
+        response.setHeader(HttpHeaders.Names.CONTENT_LENGTH, 0);
+
+        channel.write(response);
+    }
+
     protected void respondAndClose(Channel channel, HttpResponseStatus status, String message) throws Exception {
         ChannelBuffer buffer;
         buffer = ChannelBuffers.copiedBuffer(message, CharsetUtil.UTF_8);
@@ -92,16 +107,6 @@ public abstract class AbstractTransport extends SimpleChannelHandler {
         response.setHeader(HttpHeaders.Names.CONNECTION, HttpHeaders.Values.CLOSE);
 
         channel.write(response).addListener(ChannelFutureListener.CLOSE);
-    }
-
-    private static boolean isRequestKeepAlive(Channel channel) {
-        HttpRequest request;
-        request = ServiceRouterHandler.getRequestForChannel(channel);
-
-        boolean isKeepAlive;
-        isKeepAlive = request.getHeaders(HttpHeaders.Names.CONNECTION).isEmpty() || !request.getHeaders(HttpHeaders.Names.CONNECTION).contains(HttpHeaders.Values.CLOSE);
-
-        return isKeepAlive;
     }
 
 }

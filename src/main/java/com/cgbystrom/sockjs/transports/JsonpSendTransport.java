@@ -16,7 +16,7 @@ public class JsonpSendTransport extends AbstractSendTransport {
     @Override
     public void messageReceived(ChannelHandlerContext context, MessageEvent event) throws Exception {
         super.messageReceived(context, event);
-        respond(event.getChannel(), OK, "ok");
+        respond(event.getChannel(), OK);
     }
 
 }

@@ -14,14 +14,15 @@ public final class ServiceBuilder {
 
     private final static ScheduledExecutorService DEFAULT_SCHEDULED_EXECUTOR = Executors.newSingleThreadScheduledExecutor();
 
-    private String                                url;
-    private SessionCallbackFactory                factory;
-    private boolean                               isWebSocketEnabled = true;
-    private int                                   maxResponseSize = 128 * 1024;
-    private boolean                               jsessionidEnabled = false;
-    private ScheduledExecutorService              scheduledExecutor = DEFAULT_SCHEDULED_EXECUTOR;
-    private Integer                               timeoutDelay = 5000;
-    private Integer                               hreatbeatDelay = 25000;
+    private String                   url;
+    private SessionCallbackFactory   factory;
+    private boolean                  isWebSocketEnabled = true;
+    private int                      maxResponseSize = 128 * 1024;
+    private boolean                  jsessionidEnabled = false;
+    private String                   javascriptLibraryUrl = "http://cdn.sockjs.org/sockjs-0.3.4.min.js";
+    private ScheduledExecutorService scheduledExecutor = DEFAULT_SCHEDULED_EXECUTOR;
+    private Integer                  timeoutDelay = 5000;
+    private Integer                  hreatbeatDelay = 25000;
 
     public void setUrl(String url) {
         this.url = url;
@@ -55,6 +56,10 @@ public final class ServiceBuilder {
         this.hreatbeatDelay = hreatbeatDelay;
     }
 
+    public void setJavascriptLibraryUrl(String aJavascriptLibraryUrl) {
+        javascriptLibraryUrl = aJavascriptLibraryUrl;
+    }
+
     public Service build() {
         if(url == null) {
             throw new NullPointerException("url");
@@ -65,26 +70,31 @@ public final class ServiceBuilder {
         if(scheduledExecutor == null) {
             throw new NullPointerException("scheduledExecutor");
         }
+        if(javascriptLibraryUrl == null) {
+            throw new NullPointerException("javascriptLibraryUrl");
+        }
 
-        return new ServiceImpl(url, factory, isWebSocketEnabled, maxResponseSize, jsessionidEnabled, scheduledExecutor, timeoutDelay, hreatbeatDelay);
+        return new ServiceImpl(url, factory, javascriptLibraryUrl, isWebSocketEnabled, maxResponseSize, jsessionidEnabled, scheduledExecutor, timeoutDelay, hreatbeatDelay);
     }
 
     private static class ServiceImpl implements Service {
 
-        private final String                                url;
+        private final String                                      url;
+        private final String                                      javascriptLibraryUrl;
         private final ConcurrentMap<String, SimpleSessionHandler> sessions;
-        private final SessionCallbackFactory                factory;
-        private final boolean                               isWebSocketEnabled;
-        private final int                                   responseSizeLimit;
-        private final boolean                               jsessionidEnabled;
-        private final ScheduledExecutorService              scheduledExecutor;
-        private final Integer                               timeoutDelay;
-        private final Integer                               hreatbeatDelay;
+        private final SessionCallbackFactory                      factory;
+        private final boolean                                     isWebSocketEnabled;
+        private final int                                         responseSizeLimit;
+        private final boolean                                     jsessionidEnabled;
+        private final ScheduledExecutorService                    scheduledExecutor;
+        private final Integer                                     timeoutDelay;
+        private final Integer                                      hreatbeatDelay;
 
-        public ServiceImpl(String url, SessionCallbackFactory factory, boolean isWebSocketEnabled, int responseSizeLimit,
+        public ServiceImpl(String url, SessionCallbackFactory factory, String javascriptLibraryUrl, boolean isWebSocketEnabled, int responseSizeLimit,
                            boolean jsessionid, ScheduledExecutorService scheduledExecutor, Integer timeoutDelay, Integer hreatbeatDelay) {
             this.url = url;
             this.factory = factory;
+            this.javascriptLibraryUrl = javascriptLibraryUrl;
             this.isWebSocketEnabled = isWebSocketEnabled;
             this.responseSizeLimit = responseSizeLimit;
             this.jsessionidEnabled = jsessionid;
@@ -105,6 +115,11 @@ public final class ServiceBuilder {
         }
 
         @Override
+        public String getJavascriptLibraryUrl() {
+            return javascriptLibraryUrl;
+        }
+
+        @Override
         public boolean isWebSocketEnabled() {
             return isWebSocketEnabled;
         }
@@ -115,7 +130,7 @@ public final class ServiceBuilder {
         }
 
         @Override
-        public boolean isJsessionid() {
+        public boolean isJsessionidEnabled() {
             return jsessionidEnabled;
         }
 

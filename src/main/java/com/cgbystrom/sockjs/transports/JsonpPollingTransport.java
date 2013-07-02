@@ -30,6 +30,8 @@ public class JsonpPollingTransport extends AbstractPollingTransport {
 
     @Override
     public void messageReceived(ChannelHandlerContext context, MessageEvent event) throws Exception {
+        super.messageReceived(context, event);
+
         HttpRequest request = (HttpRequest) event.getMessage();
 
         QueryStringDecoder queryStringDecoder = new QueryStringDecoder(request.getUri());

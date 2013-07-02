@@ -17,7 +17,7 @@ import org.jboss.netty.handler.codec.http.CookieEncoder;
 import org.jboss.netty.handler.codec.http.HttpRequest;
 import org.jboss.netty.handler.codec.http.HttpResponse;
 
-public class CookieHandler extends SimpleChannelHandler {
+public class JsessionidCookieHandler extends SimpleChannelHandler {
 
     private static final CookieDecoder COOKIE_DECODER = new CookieDecoder();
     private static final String JSESSIONID = "JSESSIONID";

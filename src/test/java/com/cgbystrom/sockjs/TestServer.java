@@ -125,7 +125,7 @@ public class TestServer {
                 cookieNeededEchoServiceBuilder.build(), closeServiceBuilder.build(), amplifyServiceBuilder.build(), broadcastServiceBuilder.build());
 
         final ServiceRouterHandler router;
-        router = new ServiceRouterHandler(services, "http://cdn.sockjs.org/sockjs-0.3.4.min.js");
+        router = new ServiceRouterHandler(services);
 
         final Timer timer;
         timer = new HashedWheelTimer();

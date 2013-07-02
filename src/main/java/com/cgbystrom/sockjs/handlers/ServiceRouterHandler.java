@@ -38,11 +38,9 @@ public class ServiceRouterHandler extends IdleStateAwareChannelHandler {
     private final static String HTTP_REQUEST_ATTRIBUTE_NAME = "httpRequest";
 
     private final List<Service> services;
-    private final String javascriptLibraryUrl;
 
-    public ServiceRouterHandler(List<Service> services, String javascriptLibraryUrl) {
+    public ServiceRouterHandler(List<Service> services) {
         this.services = services;
-        this.javascriptLibraryUrl = javascriptLibraryUrl;
     }
 
     @Override
@@ -73,11 +71,7 @@ public class ServiceRouterHandler extends IdleStateAwareChannelHandler {
                 if (LOGGER.isDebugEnabled())
                     LOGGER.debug("Found matching service for " + requestUri + " to " + service);
 
-                AttachmentHelper.setAttribute(context.getChannel(), SERVICE_ATTRIBUTE_NAME, service);
-                AttachmentHelper.setAttribute(context.getChannel(), HTTP_REQUEST_ATTRIBUTE_NAME, request);
-
-                pipeline.addLast("sockjs-service-router", new TransportRouterHandler(service, javascriptLibraryUrl));
-
+                pipeline.addLast("sockjs-service-router", new TransportRouterHandler(service));
                 Channels.fireMessageReceived(context, request);
                 return;
             }
@@ -128,28 +122,6 @@ public class ServiceRouterHandler extends IdleStateAwareChannelHandler {
         response.setContent(buffer);
 
         return channel.write(response);
-    }
-
-    public static Service getServiceForChannel(Channel channel) {
-        Service service;
-        service = (Service) AttachmentHelper.getAttribute(channel, SERVICE_ATTRIBUTE_NAME);
-
-        if(service == null) {
-            throw new IllegalStateException("service not initialized");
-        }
-
-        return service;
-    }
-
-    public static HttpRequest getRequestForChannel(Channel channel) {
-        HttpRequest request;
-        request = (HttpRequest) AttachmentHelper.getAttribute(channel, HTTP_REQUEST_ATTRIBUTE_NAME);
-
-        if(request == null) {
-            throw new IllegalStateException("request not initialized");
-        }
-
-        return request;
     }
 
 }

@@ -16,7 +16,9 @@ public interface Service {
 
     public int getResponseSizeLimit();
 
-    public boolean isJsessionid();
+    public boolean isJsessionidEnabled();
+
+    public String getJavascriptLibraryUrl();
 
     public SessionHandler getOrCreateSession(String sessionId) throws SessionNotFound;
 
