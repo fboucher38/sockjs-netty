@@ -18,7 +18,7 @@ public class RawWebSocketTransport extends AbstractWebSocketTransport {
 
     @Override
     protected void webSocketReady(Channel channel) {
-        getSessionHandler().registerReceiver(new RawWebSocketReceiver(channel));
+        registerReceiver(new RawWebSocketReceiver(channel));
     }
 
     @Override

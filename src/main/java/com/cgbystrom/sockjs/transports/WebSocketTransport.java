@@ -18,7 +18,7 @@ public class WebSocketTransport extends AbstractWebSocketTransport {
 
     @Override
     protected void webSocketReady(Channel channel) {
-        getSessionHandler().registerReceiver(new WebSocketReceiver(channel));
+        registerReceiver(new WebSocketReceiver(channel));
     }
 
     @Override
